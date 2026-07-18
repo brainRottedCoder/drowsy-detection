@@ -16,6 +16,12 @@ export interface CalibrationData {
   baselineEAR: number;
   threshold: number;
   isCalibrated: boolean;
+  // Personal baselines captured during calibration, used to detect
+  // *deviation* from this driver's normal behavior rather than absolute values.
+  baselineBlinkRate: number; // blinks per minute
+  baselineBlinkDurationMs: number;
+  baselineYaw: number; // neutral head yaw when facing the camera
+  baselinePitch: number; // neutral head pitch when facing the camera
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -29,6 +35,10 @@ const DEFAULT_CALIBRATION: CalibrationData = {
   baselineEAR: 0.30, // Generic default
   threshold: 0.25,   // Generic default
   isCalibrated: false,
+  baselineBlinkRate: 17, // Average human blink rate (blinks/min)
+  baselineBlinkDurationMs: 250,
+  baselineYaw: 0,
+  baselinePitch: 0,
 };
 
 export const saveSettings = (settings: UserSettings) => {
@@ -52,3 +62,5 @@ export const getCalibration = (): CalibrationData => {
   const stored = localStorage.getItem(KEYS.CALIBRATION);
   return stored ? { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } : DEFAULT_CALIBRATION;
 };
+
+export const getDefaultCalibration = (): CalibrationData => ({ ...DEFAULT_CALIBRATION });

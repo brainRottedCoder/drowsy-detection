@@ -5,9 +5,10 @@ import { Howl } from 'howler';
 interface AlertModalProps {
   isOpen: boolean;
   onAcknowledge: () => void;
+  isMicrosleep?: boolean;
 }
 
-export const AlertModal: React.FC<AlertModalProps> = ({ isOpen, onAcknowledge }) => {
+export const AlertModal: React.FC<AlertModalProps> = ({ isOpen, onAcknowledge, isMicrosleep }) => {
   useEffect(() => {
     let sound: Howl | null = null;
 
@@ -59,8 +60,14 @@ export const AlertModal: React.FC<AlertModalProps> = ({ isOpen, onAcknowledge })
           </svg>
         </div>
         
-        <h2 className="text-3xl font-bold text-slate-900 mb-2">DROWSINESS DETECTED</h2>
-        <p className="text-slate-600 mb-8 text-lg">Please pull over safely and take a break.</p>
+        <h2 className="text-3xl font-bold text-slate-900 mb-2">
+          {isMicrosleep ? 'MICROSLEEP DETECTED' : 'DROWSINESS DETECTED'}
+        </h2>
+        <p className="text-slate-600 mb-8 text-lg">
+          {isMicrosleep
+            ? 'Your eyes were closed too long. Please pull over safely.'
+            : 'Signs of fatigue are building up. Please pull over and take a break.'}
+        </p>
         
         <Button 
           onClick={onAcknowledge}

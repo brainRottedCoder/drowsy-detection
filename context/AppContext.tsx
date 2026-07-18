@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { UserSettings, CalibrationData, getSettings, getCalibration, saveSettings, saveCalibration } from '../services/storage';
+import { UserSettings, CalibrationData, getSettings, getCalibration, saveSettings, saveCalibration, getDefaultCalibration } from '../services/storage';
 
 interface AppContextType {
   settings: UserSettings;
@@ -40,7 +40,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetCalibration = () => {
-    const defaultCal = { baselineEAR: 0.30, threshold: 0.25, isCalibrated: false };
+    const defaultCal = getDefaultCalibration();
     setCalibration(defaultCal);
     saveCalibration(defaultCal);
   };

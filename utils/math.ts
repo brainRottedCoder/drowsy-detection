@@ -55,3 +55,41 @@ export const calculatePERCLOS = (history: boolean[]): number => {
   const closedFrames = history.filter((isClosed) => isClosed).length;
   return closedFrames / history.length;
 };
+
+export interface HeadPose {
+  /** Normalized yaw signal. ~0 when facing forward, grows in magnitude when turned left/right. */
+  yaw: number;
+  /** Normalized pitch signal. Baseline value is face-specific; deviation from baseline indicates nodding. */
+  pitch: number;
+}
+
+// MediaPipe FaceMesh indices used for a lightweight, calibration-free head pose estimate.
+const NOSE_TIP = 1;
+const LEFT_EYE_OUTER = 33;
+const RIGHT_EYE_OUTER = 263;
+
+/**
+ * Cheap geometric head pose estimate (no camera intrinsics required).
+ * Not degree-accurate, but stable enough to gate EAR-based detection when the
+ * driver turns to talk/check mirrors, and to detect head-nod events as
+ * deviations from a per-user calibrated baseline.
+ */
+export const estimateHeadPose = (landmarks: Point[]): HeadPose => {
+  const nose = landmarks[NOSE_TIP];
+  const leftEye = landmarks[LEFT_EYE_OUTER];
+  const rightEye = landmarks[RIGHT_EYE_OUTER];
+
+  if (!nose || !leftEye || !rightEye) return { yaw: 0, pitch: 0 };
+
+  const eyeMidX = (leftEye.x + rightEye.x) / 2;
+  const eyeMidY = (leftEye.y + rightEye.y) / 2;
+  const eyeDist = euclideanDistance(leftEye, rightEye);
+  if (eyeDist === 0) return { yaw: 0, pitch: 0 };
+
+  // Nose tip drifts toward the turned-away side relative to the eye midpoint.
+  const yaw = (nose.x - eyeMidX) / eyeDist;
+  // Nose tip moves down/up relative to the eye line as the head pitches.
+  const pitch = (nose.y - eyeMidY) / eyeDist;
+
+  return { yaw, pitch };
+};

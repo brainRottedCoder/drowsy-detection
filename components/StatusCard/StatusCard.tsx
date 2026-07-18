@@ -2,17 +2,26 @@ import React from 'react';
 import { clsx } from 'clsx';
 
 interface StatusCardProps {
-  status: 'OK' | 'WARNING' | 'DROWSY';
+  status: 'OK' | 'CAUTION' | 'WARNING' | 'DROWSY';
   score: number;
   ear: number;
   mar?: number;
   isYawning?: boolean;
+  blinkRate?: number;
 }
 
-export const StatusCard: React.FC<StatusCardProps> = ({ status, score, ear, mar, isYawning }) => {
+const STATUS_LABEL: Record<StatusCardProps['status'], string> = {
+  OK: 'OK',
+  CAUTION: 'CAUTION',
+  WARNING: 'WARNING',
+  DROWSY: 'WAKE UP!',
+};
+
+export const StatusCard: React.FC<StatusCardProps> = ({ status, score, ear, mar, isYawning, blinkRate }) => {
   const getStatusColor = () => {
     switch (status) {
       case 'OK': return 'bg-emerald-500';
+      case 'CAUTION': return 'bg-yellow-500';
       case 'WARNING': return 'bg-amber-500';
       case 'DROWSY': return 'bg-red-600 animate-pulse';
       default: return 'bg-slate-500';
@@ -34,7 +43,7 @@ export const StatusCard: React.FC<StatusCardProps> = ({ status, score, ear, mar,
           )}
         </div>
         <div className="mt-2 text-4xl font-bold tracking-tight">
-          {status === 'DROWSY' ? 'WAKE UP!' : status}
+          {STATUS_LABEL[status]}
         </div>
       </div>
       
@@ -53,6 +62,7 @@ export const StatusCard: React.FC<StatusCardProps> = ({ status, score, ear, mar,
         <div className="pt-2 text-xs font-mono opacity-70">
           EAR: {ear.toFixed(3)}
           {mar !== undefined && <span className="ml-3">MAR: {mar.toFixed(3)}</span>}
+          {blinkRate !== undefined && <span className="ml-3">Blinks/min: {Math.round(blinkRate)}</span>}
         </div>
       </div>
     </div>

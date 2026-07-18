@@ -19,17 +19,27 @@ export default function MonitorPage() {
   const { landmarks, isReady: isModelReady } = useFaceLandmarks(videoRef);
   const { 
     isDrowsy, 
+    alertLevel,
     drowsinessScore, 
     currentEAR, 
     currentMAR,
     isYawning,
     yawnCount,
+    isMicrosleep,
+    isDistracted,
+    facePresence,
+    blinkRate,
     isCalibrating, 
     startCalibration, 
     stopCalibration,
     resetState
   } = useDrowsiness(landmarks);
   const { hasGlasses } = useGlassesDetection(videoRef, landmarks);
+
+  const statusCardStatus =
+    alertLevel === 'CRITICAL' ? 'DROWSY' :
+    alertLevel === 'WARNING' ? 'WARNING' :
+    alertLevel === 'CAUTION' ? 'CAUTION' : 'OK';
   
   const { calibration } = useAppContext();
   const [showCalibrationModal, setShowCalibrationModal] = useState(false);
@@ -97,6 +107,24 @@ export default function MonitorPage() {
               showDebug={showDebug}
               isCalibrating={isCalibrating}
             />
+
+            {/* Driver not visible overlay */}
+            {facePresence === 'ABSENT' && !isCalibrating && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-900/85 backdrop-blur-sm">
+                <div className="text-white text-center p-4">
+                  <div className="text-4xl mb-3">👤</div>
+                  <p className="text-lg font-semibold">Driver not visible</p>
+                  <p className="text-sm opacity-70">Monitoring paused until your face is back in frame</p>
+                </div>
+              </div>
+            )}
+
+            {/* Distraction banner (looking away, but face still visible) */}
+            {isDistracted && facePresence === 'PRESENT' && !isCalibrating && (
+              <div className="absolute top-4 left-4 right-4 bg-amber-500/90 text-white text-sm font-medium px-4 py-2 rounded-xl backdrop-blur text-center">
+                Eyes on the road — you've been looking away for a while
+              </div>
+            )}
             
             {/* Overlay Controls */}
             <div className="absolute bottom-4 right-4">
@@ -114,11 +142,12 @@ export default function MonitorPage() {
           {/* Status Cards Row */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-40">
             <StatusCard 
-              status={isDrowsy ? 'DROWSY' : drowsinessScore > 30 ? 'WARNING' : 'OK'} 
+              status={statusCardStatus} 
               score={drowsinessScore}
               ear={currentEAR}
               mar={currentMAR}
               isYawning={isYawning}
+              blinkRate={blinkRate}
             />
             
             {/* Mini Stats / Info */}
@@ -142,6 +171,10 @@ export default function MonitorPage() {
                   {hasGlasses ? 'Glasses detected' : 'No glasses'}
                 </span>
               </div>
+              <div className="flex justify-between items-center text-xs opacity-50 mt-1">
+                <span>Driver: {facePresence === 'PRESENT' ? 'In frame' : facePresence === 'FACE_LOST' ? 'Tracking...' : 'Not visible'}</span>
+                {isDistracted && <span className="text-amber-400 opacity-100">Distracted</span>}
+              </div>
             </div>
           </div>
         </div>
@@ -156,6 +189,7 @@ export default function MonitorPage() {
       <AlertModal 
         isOpen={isDrowsy} 
         onAcknowledge={handleAcknowledgeAlert} 
+        isMicrosleep={isMicrosleep}
       />
       
       <CalibrationModal 
