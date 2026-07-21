@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useCamera } from '../../hooks/useCamera';
 import { useFaceLandmarks } from '../../hooks/useFaceLandmarks';
 import { useDrowsiness } from '../../hooks/useDrowsiness';
-import { useGlassesDetection } from '../../hooks/useGlassesDetection';
+import { useEyeVisibility } from '../../hooks/useEyeVisibility';
 import { CameraViewport } from '../../components/CameraViewport/CameraViewport';
 import { StatusCard } from '../../components/StatusCard/StatusCard';
 import { DetectionActivityPanel } from '../../components/DetectionActivityPanel/DetectionActivityPanel';
@@ -24,6 +24,7 @@ export default function MonitorPage() {
     currentMAR,
     isYawning,
     yawnCount,
+    isYawnAlert,
     isMicrosleep,
     isDistracted,
     facePresence,
@@ -32,8 +33,13 @@ export default function MonitorPage() {
     startCalibration,
     resetState,
   } = useDrowsiness(landmarks);
-  const { hasSunglasses, confidence: sunglassesConfidence, debug: sunglassesDebug } =
-    useGlassesDetection(videoRef, landmarks);
+  const {
+    left: leftEyeVisibility,
+    right: rightEyeVisibility,
+    eyesNotClearlyVisible,
+    confidence: eyeVisibilityConfidence,
+    debug: eyeVisibilityDebug,
+  } = useEyeVisibility(videoRef, landmarks);
 
   const statusCardStatus =
     alertLevel === 'CRITICAL' ? 'DROWSY' :
@@ -52,11 +58,14 @@ export default function MonitorPage() {
       currentMAR,
       isYawning,
       yawnCount,
+      isYawnAlert,
       isMicrosleep,
       isDistracted,
       facePresence,
       blinkRate,
-      hasSunglasses,
+      leftEyeVisibility,
+      rightEyeVisibility,
+      eyesNotClearlyVisible,
       isModelReady,
       isCalibrating,
       landmarkCount: landmarks.length,
@@ -68,11 +77,14 @@ export default function MonitorPage() {
       currentMAR,
       isYawning,
       yawnCount,
+      isYawnAlert,
       isMicrosleep,
       isDistracted,
       facePresence,
       blinkRate,
-      hasSunglasses,
+      leftEyeVisibility,
+      rightEyeVisibility,
+      eyesNotClearlyVisible,
       isModelReady,
       isCalibrating,
       landmarks.length,
@@ -160,15 +172,15 @@ export default function MonitorPage() {
               </div>
             )}
 
-            {/* Sunglasses nudge — bottom-left of camera */}
-            {hasSunglasses && facePresence !== 'ABSENT' && !isCalibrating && (
+            {/* Eyes not clearly visible — UI warning only; scoring continues */}
+            {eyesNotClearlyVisible && facePresence !== 'ABSENT' && !isCalibrating && (
               <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2 rounded-xl border border-indigo-400/40 bg-indigo-950/85 px-3 py-2 text-indigo-100 shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-200">
                 <svg className="h-4 w-4 shrink-0 text-indigo-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2 12h3.5a2 2 0 012 1.5l.5 1.5h8l.5-1.5a2 2 0 012-1.5H22M7 15a3 3 0 11-6 0 3 3 0 016 0zm16 0a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
                 </svg>
                 <div className="leading-tight">
-                  <p className="text-xs font-semibold tracking-wide">Sunglasses on</p>
-                  <p className="text-[10px] text-indigo-200/80">Eye tracking may be less accurate</p>
+                  <p className="text-xs font-semibold tracking-wide">Eyes not clearly visible</p>
+                  <p className="text-[10px] text-indigo-200/80">Remove sunglasses or coverings</p>
                 </div>
               </div>
             )}
@@ -214,18 +226,23 @@ export default function MonitorPage() {
               </div>
               <div className="flex justify-between items-center text-xs opacity-50">
                 <span>Model: MediaPipe FaceMesh (Client-side)</span>
-                <span className={hasSunglasses ? 'text-indigo-400 opacity-100' : ''}>
-                  {hasSunglasses ? 'Sunglasses detected' : 'No sunglasses'} ({Math.round(sunglassesConfidence * 100)}%)
+                <span className={eyesNotClearlyVisible ? 'text-indigo-400 opacity-100' : ''}>
+                  Eyes {leftEyeVisibility === 'VISIBLE' && rightEyeVisibility === 'VISIBLE' ? 'visible' : leftEyeVisibility === 'NOT_VISIBLE' || rightEyeVisibility === 'NOT_VISIBLE' ? 'blocked' : 'uncertain'} ({Math.round(eyeVisibilityConfidence * 100)}%)
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs opacity-50 mt-1">
                 <span>Driver: {facePresence === 'PRESENT' ? 'In frame' : facePresence === 'FACE_LOST' ? 'Tracking...' : 'Not visible'}</span>
                 {isDistracted && <span className="text-amber-400 opacity-100">Distracted</span>}
+                {isYawnAlert && <span className="text-orange-400 opacity-100">Yawn alert</span>}
               </div>
-              {showDebug && sunglassesDebug && (
+              {showDebug && eyeVisibilityDebug && (
                 <div className="mt-2 rounded-lg bg-black/30 p-2 font-mono text-[10px] leading-relaxed text-indigo-200">
-                  <div>lumaDrop {sunglassesDebug.luminanceDrop.toFixed(2)} · flat {sunglassesDebug.flatness.toFixed(2)} · jitter {sunglassesDebug.eyeTrackingObscured.toFixed(2)}</div>
-                  <div>raw {sunglassesDebug.rawScore.toFixed(2)} · smoothed {sunglassesConfidence.toFixed(2)} (enter &gt; 0.50)</div>
+                  <div>
+                    L {leftEyeVisibility} iris={eyeVisibilityDebug.left.irisInContour ? 'Y' : 'N'} opacity={eyeVisibilityDebug.left.opacityScore.toFixed(2)} dark={eyeVisibilityDebug.left.darkPixelRatio.toFixed(2)} luma={Math.round(eyeVisibilityDebug.left.eyeMedianLuma)}/{Math.round(eyeVisibilityDebug.left.skinMedianLuma)}
+                  </div>
+                  <div>
+                    R {rightEyeVisibility} iris={eyeVisibilityDebug.right.irisInContour ? 'Y' : 'N'} opacity={eyeVisibilityDebug.right.opacityScore.toFixed(2)} dark={eyeVisibilityDebug.right.darkPixelRatio.toFixed(2)} luma={Math.round(eyeVisibilityDebug.right.eyeMedianLuma)}/{Math.round(eyeVisibilityDebug.right.skinMedianLuma)}
+                  </div>
                 </div>
               )}
             </div>
@@ -244,8 +261,9 @@ export default function MonitorPage() {
         detections={{
           isMicrosleep,
           isYawning,
+          isYawnAlert,
           isDistracted,
-          hasSunglasses,
+          eyesNotClearlyVisible,
           facePresence,
           blinkRate,
           score: drowsinessScore,

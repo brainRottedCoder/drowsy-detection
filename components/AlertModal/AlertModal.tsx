@@ -1,12 +1,14 @@
 import React, { useEffect } from 'react';
 import { Button } from '../ui/Button';
 import type { AlertLevel } from '../../hooks/useDrowsiness';
+import { useAppContext } from '../../context/AppContext';
 
 export interface DetectionFlags {
   isMicrosleep: boolean;
   isYawning: boolean;
+  isYawnAlert: boolean;
   isDistracted: boolean;
-  hasSunglasses: boolean;
+  eyesNotClearlyVisible: boolean;
   facePresence: 'PRESENT' | 'FACE_LOST' | 'ABSENT';
   blinkRate: number;
   score: number;
@@ -19,7 +21,9 @@ interface AlertModalProps {
   onAcknowledge: () => void;
 }
 
-const LEVEL_STYLES: Record<Exclude<AlertLevel, 'NONE'>, { border: string; badge: string; title: string }> = {
+type DisplayLevel = Exclude<AlertLevel, 'NONE'> | 'INFO';
+
+const LEVEL_STYLES: Record<DisplayLevel, { border: string; badge: string; title: string }> = {
   CAUTION: {
     border: 'border-yellow-400',
     badge: 'bg-yellow-500',
@@ -35,14 +39,20 @@ const LEVEL_STYLES: Record<Exclude<AlertLevel, 'NONE'>, { border: string; badge:
     badge: 'bg-red-600 animate-pulse',
     title: 'Critical',
   },
+  INFO: {
+    border: 'border-indigo-400',
+    badge: 'bg-indigo-500',
+    title: 'Attention',
+  },
 };
 
 function buildDetectionList(d: DetectionFlags): string[] {
   const items: string[] = [];
   if (d.isMicrosleep) items.push('Microsleep (eyes closed too long)');
-  if (d.isYawning) items.push('Yawning');
+  if (d.isYawnAlert) items.push('Frequent yawning detected — consider taking a break');
+  else if (d.isYawning) items.push('Yawning');
   if (d.isDistracted) items.push('Looking away / distracted');
-  if (d.hasSunglasses) items.push('Sunglasses detected');
+  if (d.eyesNotClearlyVisible) items.push('Eyes not clearly visible');
   if (d.facePresence === 'FACE_LOST') items.push('Face tracking unstable');
   if (d.facePresence === 'ABSENT') items.push('Driver not in frame');
   if (d.blinkRate > 30) items.push(`High blink rate (${Math.round(d.blinkRate)}/min)`);
@@ -54,16 +64,30 @@ function buildDetectionList(d: DetectionFlags): string[] {
   return items;
 }
 
+function resolveDisplayLevel(alertLevel: AlertLevel, d: DetectionFlags): DisplayLevel | null {
+  if (alertLevel !== 'NONE') return alertLevel;
+  if (d.facePresence === 'ABSENT') return 'WARNING';
+  if (d.isYawnAlert) return 'CAUTION';
+  if (d.eyesNotClearlyVisible) return 'INFO';
+  return null;
+}
+
 export const AlertModal: React.FC<AlertModalProps> = ({
   alertLevel,
   detections,
   onAcknowledge,
 }) => {
+  const { settings } = useAppContext();
   const isCritical = alertLevel === 'CRITICAL';
-  const visible = alertLevel !== 'NONE';
+  const displayLevel = resolveDisplayLevel(alertLevel, detections);
+  const visible = displayLevel !== null;
 
   useEffect(() => {
     if (!isCritical) return;
+
+    const volume = Math.min(1, Math.max(0, settings.volume));
+    const peak = 0.35 * volume;
+    if (peak <= 0) return;
 
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const osc = ctx.createOscillator();
@@ -74,9 +98,9 @@ export const AlertModal: React.FC<AlertModalProps> = ({
     osc.frequency.value = 800;
 
     const now = ctx.currentTime;
-    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.setValueAtTime(peak, now);
     gain.gain.setValueAtTime(0, now + 0.2);
-    gain.gain.setValueAtTime(0.35, now + 0.4);
+    gain.gain.setValueAtTime(peak, now + 0.4);
     gain.gain.setValueAtTime(0, now + 0.6);
     osc.start();
 
@@ -88,12 +112,23 @@ export const AlertModal: React.FC<AlertModalProps> = ({
         /* already closed */
       }
     };
-  }, [isCritical]);
+  }, [isCritical, settings.volume]);
 
-  if (!visible) return null;
+  if (!visible || !displayLevel) return null;
 
-  const style = LEVEL_STYLES[alertLevel];
+  const style = LEVEL_STYLES[displayLevel];
   const detectionsList = buildDetectionList(detections);
+
+  const subtitle =
+    detections.facePresence === 'ABSENT' && alertLevel === 'NONE'
+      ? 'Face has been out of frame — please look at the camera.'
+      : detections.isYawnAlert && alertLevel === 'NONE'
+        ? 'Multiple yawns in a short time — take a break if you can.'
+        : detections.eyesNotClearlyVisible && alertLevel === 'NONE'
+          ? 'Eyes not clearly visible — remove sunglasses or coverings.'
+          : isCritical
+            ? 'Pull over safely when you can.'
+            : 'Fatigue signals detected — stay alert.';
 
   return (
     <div
@@ -119,11 +154,7 @@ export const AlertModal: React.FC<AlertModalProps> = ({
               <h2 className="text-sm font-bold uppercase tracking-wide">{style.title}</h2>
               <span className="text-xs font-mono opacity-70">{Math.round(detections.score)}%</span>
             </div>
-            <p className="mt-1 text-xs text-slate-300">
-              {isCritical
-                ? 'Pull over safely when you can.'
-                : 'Fatigue signals detected — stay alert.'}
-            </p>
+            <p className="mt-1 text-xs text-slate-300">{subtitle}</p>
 
             <ul className="mt-3 space-y-1.5">
               {detectionsList.map(item => (

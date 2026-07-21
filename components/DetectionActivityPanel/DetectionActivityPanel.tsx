@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import type { AlertLevel } from '../../hooks/useDrowsiness';
 import type { FacePresenceState } from '../../hooks/useFacePresence';
+import type { EyeVisibilityState } from '../../hooks/eyeVisibility/types';
 
 export interface DetectionSnapshot {
   alertLevel: AlertLevel;
@@ -12,11 +13,14 @@ export interface DetectionSnapshot {
   currentMAR: number;
   isYawning: boolean;
   yawnCount: number;
+  isYawnAlert: boolean;
   isMicrosleep: boolean;
   isDistracted: boolean;
   facePresence: FacePresenceState;
   blinkRate: number;
-  hasSunglasses: boolean;
+  leftEyeVisibility: EyeVisibilityState;
+  rightEyeVisibility: EyeVisibilityState;
+  eyesNotClearlyVisible: boolean;
   isModelReady: boolean;
   isCalibrating: boolean;
   landmarkCount: number;
@@ -108,10 +112,13 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
     detection.alertLevel,
     detection.isYawning,
     detection.yawnCount,
+    detection.isYawnAlert,
     detection.isMicrosleep,
     detection.isDistracted,
     detection.facePresence,
-    detection.hasSunglasses,
+    detection.eyesNotClearlyVisible,
+    detection.leftEyeVisibility,
+    detection.rightEyeVisibility,
     detection.isModelReady,
     detection.isCalibrating,
   ].join('|');
@@ -179,16 +186,22 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
       pushLog(`Yawn count updated (${current.yawnCount})`, 'caution');
     }
 
+    if (!previous.isYawnAlert && current.isYawnAlert) {
+      pushLog('Frequent yawning alert — multiple yawns in 60s', 'warning');
+    } else if (previous.isYawnAlert && !current.isYawnAlert) {
+      pushLog('Frequent yawning alert cleared', 'info');
+    }
+
     if (!previous.isDistracted && current.isDistracted) {
       pushLog('Distraction detected — looking away', 'warning');
     } else if (previous.isDistracted && !current.isDistracted) {
       pushLog('Gaze returned to forward view', 'info');
     }
 
-    if (!previous.hasSunglasses && current.hasSunglasses) {
-      pushLog('Sunglasses detected — eyes obscured', 'info');
-    } else if (previous.hasSunglasses && !current.hasSunglasses) {
-      pushLog('Sunglasses no longer detected', 'info');
+    if (!previous.eyesNotClearlyVisible && current.eyesNotClearlyVisible) {
+      pushLog('Eyes not clearly visible — remove sunglasses or coverings', 'info');
+    } else if (previous.eyesNotClearlyVisible && !current.eyesNotClearlyVisible) {
+      pushLog('Eyes clearly visible again', 'info');
     }
   }, [eventKey]);
 
@@ -228,8 +241,23 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
         <div className="flex flex-wrap gap-1.5">
           <FlagChip active={detection.isMicrosleep} label="Microsleep" tone="bg-red-600 text-white" />
           <FlagChip active={detection.isYawning} label="Yawning" tone="bg-amber-500 text-white" />
+          <FlagChip active={detection.isYawnAlert} label="Yawn Alert" tone="bg-orange-600 text-white" />
           <FlagChip active={detection.isDistracted} label="Distracted" tone="bg-orange-500 text-white" />
-          <FlagChip active={detection.hasSunglasses} label="Sunglasses" tone="bg-indigo-600 text-white" />
+          <FlagChip
+            active={detection.leftEyeVisibility === 'NOT_VISIBLE'}
+            label="L eye"
+            tone="bg-indigo-600 text-white"
+          />
+          <FlagChip
+            active={detection.rightEyeVisibility === 'NOT_VISIBLE'}
+            label="R eye"
+            tone="bg-indigo-600 text-white"
+          />
+          <FlagChip
+            active={detection.eyesNotClearlyVisible}
+            label="Eyes blocked"
+            tone="bg-indigo-600 text-white"
+          />
           <FlagChip
             active={detection.facePresence === 'PRESENT'}
             label={faceLabel}
@@ -256,6 +284,17 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
           <MetricRow label="MAR (mouth aspect)" value={detection.currentMAR.toFixed(3)} />
           <MetricRow label="Blink rate" value={`${Math.round(detection.blinkRate)} / min`} />
           <MetricRow label="Yawn count" value={String(detection.yawnCount)} />
+          <MetricRow
+            label="L / R eye"
+            value={`${detection.leftEyeVisibility} / ${detection.rightEyeVisibility}`}
+            accent={
+              detection.eyesNotClearlyVisible
+                ? 'text-indigo-300'
+                : detection.leftEyeVisibility === 'VISIBLE' && detection.rightEyeVisibility === 'VISIBLE'
+                  ? 'text-emerald-400'
+                  : 'text-slate-300'
+            }
+          />
           <MetricRow
             label="Landmarks"
             value={detection.landmarkCount > 0 ? `${detection.landmarkCount} points` : 'None'}
