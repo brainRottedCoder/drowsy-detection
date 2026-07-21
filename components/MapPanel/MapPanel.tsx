@@ -55,19 +55,6 @@ export const MapPanel: React.FC<MapPanelProps> = ({ isDrowsy }) => {
           </div>
         )}
       </div>
-
-      {!isDrowsy && (
-        <div className="p-4 bg-white">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-slate-500">Next Rest Stop</span>
-            <span className="font-medium text-slate-900">{restStops[0]?.distance}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-slate-500">ETA Destination</span>
-            <span className="font-medium text-slate-900">1h 30m</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

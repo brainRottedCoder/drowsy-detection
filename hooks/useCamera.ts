@@ -37,36 +37,65 @@ export const useCamera = (): UseCameraReturn => {
   useEffect(() => {
     let stream: MediaStream | null = null;
 
-    const startCamera = async () => {
-      try {
-        setError(null);
-        
-        const constraints: MediaStreamConstraints = {
-          video: currentDeviceId 
-            ? { deviceId: { exact: currentDeviceId } } 
-            : { facingMode: 'user' },
-          audio: false
-        };
-
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        setPermissionGranted(true);
-        
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          // Wait for metadata to load to ensure dimensions are correct
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play().catch(e => console.error("Play error:", e));
-          };
-        }
-
-        // Refresh device list after permission is granted (labels become available)
-        getDevices();
-
-      } catch (err: any) {
-        console.error("Camera error:", err);
-        setError(err.name === 'NotAllowedError' ? 'Camera permission denied' : 'Could not access camera');
-        setPermissionGranted(false);
+    // Try a chain of progressively looser constraints. A hard `exact`
+    // deviceId throws OverconstrainedError the moment that device is stale,
+    // busy, or (common on Windows laptops with an IR/Windows-Hello camera
+    // alongside the regular webcam) simply doesn't support the requested
+    // combination — with no fallback, the whole camera silently fails.
+    const buildConstraintAttempts = (): MediaStreamConstraints[] => {
+      const attempts: MediaStreamConstraints[] = [];
+      if (currentDeviceId) {
+        attempts.push({ video: { deviceId: { exact: currentDeviceId } }, audio: false });
+        attempts.push({ video: { deviceId: { ideal: currentDeviceId } }, audio: false });
       }
+      attempts.push({ video: { facingMode: 'user' }, audio: false });
+      attempts.push({ video: true, audio: false });
+      return attempts;
+    };
+
+    const startCamera = async () => {
+      setError(null);
+      const attempts = buildConstraintAttempts();
+      let lastErr: any = null;
+
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          lastErr = null;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          // OverconstrainedError / NotFoundError → try the next, looser attempt.
+          // NotAllowedError (permission denied) won't succeed on retry; stop early.
+          if (err?.name === 'NotAllowedError') break;
+        }
+      }
+
+      if (!stream) {
+        console.error('Camera error:', lastErr);
+        setError(
+          lastErr?.name === 'NotAllowedError'
+            ? 'Camera permission denied'
+            : lastErr?.name === 'OverconstrainedError'
+              ? 'Selected camera is unavailable — try a different camera in settings'
+              : 'Could not access camera'
+        );
+        setPermissionGranted(false);
+        return;
+      }
+
+      setPermissionGranted(true);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        // Wait for metadata to load to ensure dimensions are correct
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(e => console.error('Play error:', e));
+        };
+      }
+
+      // Refresh device list after permission is granted (labels become available)
+      getDevices();
     };
 
     startCamera();

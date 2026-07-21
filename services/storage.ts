@@ -33,7 +33,9 @@ const DEFAULT_SETTINGS: UserSettings = {
 
 const DEFAULT_CALIBRATION: CalibrationData = {
   baselineEAR: 0.30, // Generic default
-  threshold: 0.25,   // Generic default
+  // Must be clearly below typical open-eye EAR (~0.25–0.35). 0.25 was causing
+  // false microsleep when eyes were only slightly narrowed.
+  threshold: 0.165,
   isCalibrated: false,
   baselineBlinkRate: 17, // Average human blink rate (blinks/min)
   baselineBlinkDurationMs: 250,
@@ -60,7 +62,19 @@ export const saveCalibration = (data: CalibrationData) => {
 export const getCalibration = (): CalibrationData => {
   if (typeof window === 'undefined') return DEFAULT_CALIBRATION;
   const stored = localStorage.getItem(KEYS.CALIBRATION);
-  return stored ? { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } : DEFAULT_CALIBRATION;
+  if (!stored) return DEFAULT_CALIBRATION;
+
+  const parsed = { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } as CalibrationData;
+
+  // Migrate overly aggressive thresholds from older builds (e.g. baseline * 0.8 ≈ 0.24+),
+  // which caused false microsleep while eyes were open.
+  if (parsed.threshold > 0.20) {
+    const migrated = Math.min(0.20, Math.max(0.12, parsed.baselineEAR * 0.55));
+    parsed.threshold = migrated;
+    localStorage.setItem(KEYS.CALIBRATION, JSON.stringify(parsed));
+  }
+
+  return parsed;
 };
 
 export const getDefaultCalibration = (): CalibrationData => ({ ...DEFAULT_CALIBRATION });

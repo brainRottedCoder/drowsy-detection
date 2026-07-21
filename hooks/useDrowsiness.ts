@@ -18,15 +18,24 @@ const MOUTH_INDICES = [61, 81, 311, 291, 402, 178];
 // instead of "any frame below threshold" is what lets normal blinking,
 // looking down briefly, etc. pass through without tripping the alarm.
 const BLINK_MAX_MS = 400;
-const MICROSLEEP_MS = 1500;
+const MICROSLEEP_MS = 2000;
 const PERCLOS_WINDOW_MS = 60_000; // Rolling window for "closed eyelid" percentage
 const BLINK_STATS_WINDOW_MS = 60_000; // Rolling window for blink rate / duration
+
+// Closed-eye EAR must fall well below open-eye baseline.
+// 0.8 was far too aggressive: slight squint / look-down / glasses glare
+// dropped EAR ~15-20% and falsely counted as "closed" → microsleep alerts.
+const EAR_CLOSED_RATIO = 0.55;
+const EAR_OPEN_RATIO = 0.70; // Hysteresis: stay "closed" until EAR recovers higher
+const EAR_THRESHOLD_MIN = 0.12;
+const EAR_THRESHOLD_MAX = 0.20;
 
 // --- Head pose gating ---
 // Looking away (talking, mirrors) geometrically compresses/distorts the EAR
 // signal. We suspend eye-based scoring while the head is turned, and instead
 // raise a separate "distracted" flag if it goes on too long.
 const YAW_GATE_THRESHOLD = 0.18; // Normalized nose-to-eye-midpoint offset
+const PITCH_GATE_DELTA = 0.14; // Looking down/up enough to distort EAR
 const LOOK_AWAY_DISTRACTION_MS = 4000;
 const NOD_PITCH_DELTA = 0.12; // Deviation from calibrated baseline pitch
 const NOD_WINDOW_MS = 60_000;
@@ -110,6 +119,7 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
 
   // Eye closure tracking
   const closedSinceRef = useRef<number | null>(null);
+  const eyesClosedLatchedRef = useRef(false); // Hysteresis latch between close/open thresholds
   const closureIntervalsRef = useRef<ClosureInterval[]>([]);
   const monitoringStartRef = useRef<number>(Date.now());
 
@@ -175,16 +185,25 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
       return;
     }
 
-    if (isLookingAway) {
-      // Suspend eye-closure tracking while turned away; EAR is unreliable at
-      // this angle and shouldn't be scored as "eyes closing".
+    // Pitch extremes (looking at dashboard / ceiling) also crush EAR geometry.
+    const pitchDelta = Math.abs(pitch - calibration.baselinePitch);
+    const poseUnreliable = isLookingAway || pitchDelta > PITCH_GATE_DELTA;
+
+    if (poseUnreliable) {
+      // Suspend eye-closure tracking while pose distorts EAR; don't score as closed.
       closedSinceRef.current = null;
-      if (lookAwaySinceRef.current === null) lookAwaySinceRef.current = now;
-      setIsDistracted(now - lookAwaySinceRef.current > LOOK_AWAY_DISTRACTION_MS);
+      eyesClosedLatchedRef.current = false;
+      if (isLookingAway) {
+        if (lookAwaySinceRef.current === null) lookAwaySinceRef.current = now;
+        setIsDistracted(now - lookAwaySinceRef.current > LOOK_AWAY_DISTRACTION_MS);
+      } else {
+        lookAwaySinceRef.current = null;
+        setIsDistracted(false);
+      }
     } else {
       lookAwaySinceRef.current = null;
       setIsDistracted(false);
-      updateClosureTracking(avgEAR, now);
+      updateClosureTracking(leftEAR, rightEAR, now);
     }
 
     // --- Head nod detection ---
@@ -233,8 +252,23 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
   }, [landmarks, isCalibrating, calibration.baselinePitch, calibration.threshold, settings.sensitivity]);
 
   // Finalizes/creates closure intervals based on real-time EAR vs threshold.
-  const updateClosureTracking = (avgEAR: number, now: number) => {
-    const isClosed = avgEAR < calibration.threshold;
+  // Requires BOTH eyes below the close threshold (avoids one-eye landmark noise),
+  // and uses hysteresis so noisy EAR near the boundary doesn't keep "closed" latched.
+  const updateClosureTracking = (leftEAR: number, rightEAR: number, now: number) => {
+    const closeAt = calibration.threshold;
+    const openAt = Math.min(
+      EAR_THRESHOLD_MAX * 1.15,
+      Math.max(closeAt * (EAR_OPEN_RATIO / EAR_CLOSED_RATIO), closeAt + 0.03)
+    );
+
+    let isClosed = eyesClosedLatchedRef.current;
+    if (!eyesClosedLatchedRef.current) {
+      isClosed = leftEAR < closeAt && rightEAR < closeAt;
+    } else {
+      // Stay closed until both eyes clearly reopen above the higher open threshold.
+      isClosed = !(leftEAR > openAt && rightEAR > openAt);
+    }
+    eyesClosedLatchedRef.current = isClosed;
 
     if (isClosed) {
       if (closedSinceRef.current === null) {
@@ -263,8 +297,10 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     // Reuses the same duration-based classification during calibration so we
     // learn the user's real blink cadence, not just their open-eye EAR.
     const provisionalThreshold = calibrationEARRef.current.length > 5
-      ? (calibrationEARRef.current.reduce((a, b) => a + b, 0) / calibrationEARRef.current.length) * 0.8
-      : 0.2;
+      ? deriveClosedThreshold(
+          calibrationEARRef.current.reduce((a, b) => a + b, 0) / calibrationEARRef.current.length
+        )
+      : 0.18;
     const isClosed = avgEAR < provisionalThreshold;
 
     if (isClosed && closedSinceRef.current === null) {
@@ -391,6 +427,7 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     calibrationPitchRef.current = [];
     calibrationBlinkEventsRef.current = [];
     closedSinceRef.current = null;
+    eyesClosedLatchedRef.current = false;
   };
 
   const stopCalibration = () => {
@@ -402,7 +439,9 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     const earSamples = calibrationEARRef.current;
     if (earSamples.length === 0) return;
 
-    const avgEAR = earSamples.reduce((a, b) => a + b, 0) / earSamples.length;
+    // Prefer open-eye EAR: use upper-half median so blinks during calibration
+    // don't pull the baseline (and thus the closed threshold) downward incorrectly.
+    const baselineEAR = openEyeBaseline(earSamples);
     const avgYaw = average(calibrationYawRef.current);
     const avgPitch = average(calibrationPitchRef.current);
 
@@ -416,8 +455,8 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
       : 250;
 
     updateCalibration({
-      baselineEAR: avgEAR,
-      threshold: avgEAR * 0.8,
+      baselineEAR,
+      threshold: deriveClosedThreshold(baselineEAR),
       isCalibrated: true,
       baselineYaw: avgYaw,
       baselinePitch: avgPitch,
@@ -435,6 +474,7 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     setDrowsinessScore(0);
     closureIntervalsRef.current = [];
     closedSinceRef.current = null;
+    eyesClosedLatchedRef.current = false;
     monitoringStartRef.current = Date.now();
     mouthOpenFramesRef.current = 0;
     yawnRegisteredRef.current = false;
@@ -469,3 +509,20 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 const average = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+
+/** Closed-eye threshold from open-eye baseline, clamped to a sane absolute range. */
+export const deriveClosedThreshold = (baselineEAR: number): number => {
+  const ratioBased = baselineEAR * EAR_CLOSED_RATIO;
+  return Math.min(EAR_THRESHOLD_MAX, Math.max(EAR_THRESHOLD_MIN, ratioBased));
+};
+
+/** Median of the upper half of samples ≈ open-eye EAR (blinks live in the lower half). */
+const openEyeBaseline = (samples: number[]): number => {
+  if (samples.length === 0) return 0.3;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const upper = sorted.slice(Math.floor(sorted.length / 2));
+  const mid = Math.floor(upper.length / 2);
+  return upper.length % 2 === 0
+    ? (upper[mid - 1] + upper[mid]) / 2
+    : upper[mid];
+};
