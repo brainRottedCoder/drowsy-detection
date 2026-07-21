@@ -238,10 +238,10 @@ export default function MonitorPage() {
               {showDebug && eyeVisibilityDebug && (
                 <div className="mt-2 rounded-lg bg-black/30 p-2 font-mono text-[10px] leading-relaxed text-indigo-200">
                   <div>
-                    L {leftEyeVisibility} iris={eyeVisibilityDebug.left.irisInContour ? 'Y' : 'N'} opacity={eyeVisibilityDebug.left.opacityScore.toFixed(2)} dark={eyeVisibilityDebug.left.darkPixelRatio.toFixed(2)} luma={Math.round(eyeVisibilityDebug.left.eyeMedianLuma)}/{Math.round(eyeVisibilityDebug.left.skinMedianLuma)}
+                    L {leftEyeVisibility} iris={eyeVisibilityDebug.left.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.left.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.left.poseOk ? 'Y' : 'N'}
                   </div>
                   <div>
-                    R {rightEyeVisibility} iris={eyeVisibilityDebug.right.irisInContour ? 'Y' : 'N'} opacity={eyeVisibilityDebug.right.opacityScore.toFixed(2)} dark={eyeVisibilityDebug.right.darkPixelRatio.toFixed(2)} luma={Math.round(eyeVisibilityDebug.right.eyeMedianLuma)}/{Math.round(eyeVisibilityDebug.right.skinMedianLuma)}
+                    R {rightEyeVisibility} iris={eyeVisibilityDebug.right.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.right.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.right.poseOk ? 'Y' : 'N'}
                   </div>
                 </div>
               )}

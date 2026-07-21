@@ -19,11 +19,6 @@ const UNKNOWN_DEBUG: EyeVisibilityDebugFlags = {
   earOk: false,
   geometryScore: 0,
   usedSecondaryOcclusion: false,
-  relativeDarkness: 0,
-  darkPixelRatio: 0,
-  opacityScore: 0,
-  eyeMedianLuma: 0,
-  skinMedianLuma: 0,
 };
 
 function combineOverall(left: EyeVisibilityState, right: EyeVisibilityState): EyeVisibilityState {
@@ -105,7 +100,6 @@ export const useEyeVisibility = (
         setRight('UNKNOWN');
         setOverall('UNKNOWN');
         setConfidence(0);
-        // Do not set eyesNotClearlyVisible for UNKNOWN / missing face
         setEyesNotClearlyVisible(false);
         notVisibleSinceRef.current = null;
         setDebug({ left: UNKNOWN_DEBUG, right: UNKNOWN_DEBUG });
@@ -129,23 +123,9 @@ export const useEyeVisibility = (
         baselinePitch,
       });
 
-      // Support sync backend (Promise backends can be added later)
       const apply = (L: Awaited<typeof leftSample>, R: Awaited<typeof rightSample>) => {
-        // Two moderately opaque eye crops are strong sunglasses evidence even
-        // when each crop narrowly misses the strict per-eye threshold. Requiring
-        // bilateral agreement protects naturally dark irises / clear glasses.
-        const bilateralOpaque =
-          L.debug.usedSecondaryOcclusion &&
-          R.debug.usedSecondaryOcclusion &&
-          L.debug.opacityScore >= 0.5 &&
-          R.debug.opacityScore >= 0.5 &&
-          L.debug.relativeDarkness >= 0.25 &&
-          R.debug.relativeDarkness >= 0.25;
-        const leftRawState = bilateralOpaque ? 'NOT_VISIBLE' : L.state;
-        const rightRawState = bilateralOpaque ? 'NOT_VISIBLE' : R.state;
-
-        leftHistoryRef.current.push(stateToScore(leftRawState));
-        rightHistoryRef.current.push(stateToScore(rightRawState));
+        leftHistoryRef.current.push(stateToScore(L.state));
+        rightHistoryRef.current.push(stateToScore(R.state));
         if (leftHistoryRef.current.length > SCORE_WINDOW) leftHistoryRef.current.shift();
         if (rightHistoryRef.current.length > SCORE_WINDOW) rightHistoryRef.current.shift();
 
@@ -154,7 +134,6 @@ export const useEyeVisibility = (
         const rightAvg =
           rightHistoryRef.current.reduce((a, b) => a + b, 0) / rightHistoryRef.current.length;
 
-        // Map dwell ms to score thresholds (enter ~0.7, exit ~0.4 of smoothed 0–1)
         const enterScore = 0.7;
         const exitScore = 0.4;
 

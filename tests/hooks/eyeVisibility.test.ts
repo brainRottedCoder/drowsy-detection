@@ -1,6 +1,5 @@
 import type { Point } from '../../utils/math';
 import {
-  classifyEyeAppearance,
   evaluateEyeGeometry,
   pointInPolygon,
 } from '../../hooks/eyeVisibility/landmarkBackend';
@@ -27,7 +26,6 @@ function makeLandmarks(overrides: {
 
   const pts: Point[] = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
 
-  // Inter-ocular ~0.2 in normalized space
   const leftOuter = { x: 0.35, y: 0.42 };
   const leftInner = { x: leftCollapsed ? 0.36 : 0.45, y: 0.42 };
   const rightInner = { x: 0.55, y: 0.42 };
@@ -36,7 +34,6 @@ function makeLandmarks(overrides: {
   const leftHalfH = leftEarLow ? 0.004 : 0.025;
   const rightHalfH = rightEarLow ? 0.004 : 0.025;
 
-  // Left EAR order: outer, top1, top2, inner, bottom2, bottom1
   const leftEye = [
     leftOuter,
     { x: 0.38, y: 0.42 - leftHalfH },
@@ -50,7 +47,6 @@ function makeLandmarks(overrides: {
     pts[idx] = { ...leftEye[i], z: 0 };
   });
 
-  // Right EAR order: inner, top1, top2, outer, bottom2, bottom1 (matches app indices)
   const rightEye = [
     rightInner,
     { x: 0.58, y: 0.42 - rightHalfH },
@@ -64,16 +60,14 @@ function makeLandmarks(overrides: {
     pts[idx] = { ...rightEye[i], z: 0 };
   });
 
-  // Nose: center for frontal; shift for extreme yaw
   pts[1] =
     yaw === 'extreme'
       ? { x: 0.72, y: 0.55, z: 0 }
       : { x: 0.5, y: 0.55, z: 0 };
 
-  // Iris centers
   pts[468] = leftIrisInside
     ? { x: (leftOuter.x + leftInner.x) / 2, y: 0.42, z: 0 }
-    : { x: 0.2, y: 0.2, z: 0 }; // far outside contour
+    : { x: 0.2, y: 0.2, z: 0 };
   pts[473] = rightIrisInside
     ? { x: (rightOuter.x + rightInner.x) / 2, y: 0.42, z: 0 }
     : { x: 0.9, y: 0.2, z: 0 };
@@ -84,7 +78,6 @@ function makeLandmarks(overrides: {
 const defaultOpts = {
   yawGate: 0.18,
   pitchGate: 0.14,
-  // Synthetic mesh places nose below the eye line (~0.43 pitch units)
   baselinePitch: 0.43,
 };
 
@@ -98,35 +91,6 @@ describe('pointInPolygon', () => {
     ];
     expect(pointInPolygon({ x: 0.5, y: 0.5 }, square)).toBe(true);
     expect(pointInPolygon({ x: 1.5, y: 0.5 }, square)).toBe(false);
-  });
-});
-
-describe('classifyEyeAppearance', () => {
-  it('detects broadly dark opaque sunglasses despite small bright reflections', () => {
-    const pixels = [
-      ...Array(80).fill(22),
-      ...Array(15).fill(35),
-      ...Array(5).fill(180),
-    ];
-    const result = classifyEyeAppearance(25, 115, pixels);
-    expect(result.opaque).toBe(true);
-    expect(result.darkPixelRatio).toBeGreaterThan(0.9);
-  });
-
-  it('does not classify clear glasses as opaque', () => {
-    const pixels = [
-      ...Array(25).fill(35),
-      ...Array(55).fill(95),
-      ...Array(20).fill(145),
-    ];
-    const result = classifyEyeAppearance(92, 115, pixels);
-    expect(result.opaque).toBe(false);
-  });
-
-  it('does not call uniformly low-light footage opaque', () => {
-    const pixels = Array(100).fill(20);
-    const result = classifyEyeAppearance(20, 38, pixels);
-    expect(result.opaque).toBe(false);
   });
 });
 

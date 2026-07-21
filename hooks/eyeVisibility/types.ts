@@ -11,17 +11,8 @@ export interface EyeVisibilityDebugFlags {
   poseOk: boolean;
   earOk: boolean;
   geometryScore: number;
-  /** True when strict eye-vs-skin appearance evidence was available. */
+  /** True when secondary crop evidence confirmed geometry failure. */
   usedSecondaryOcclusion: boolean;
-  /** Eye-region median darkness relative to nearby skin, 0–1. */
-  relativeDarkness: number;
-  /** Fraction of the expanded eye/lens crop classified as substantially dark. */
-  darkPixelRatio: number;
-  /** Combined strict opaque-lens/covering evidence, 0–1. */
-  opacityScore: number;
-  /** Raw medians exposed for field tuning/debugging. */
-  eyeMedianLuma: number;
-  skinMedianLuma: number;
 }
 
 export interface EyeVisibilitySample {

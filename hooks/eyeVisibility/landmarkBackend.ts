@@ -23,13 +23,6 @@ const MAX_EAR = 0.55;
 const MIN_EYE_WIDTH_RATIO = 0.12;
 /** Below this width ratio under frontal pose + failed iris → occlusion candidate. */
 const COLLAPSED_WIDTH_RATIO = 0.08;
-const APPEARANCE_DEBUG_DEFAULTS = {
-  relativeDarkness: 0,
-  darkPixelRatio: 0,
-  opacityScore: 0,
-  eyeMedianLuma: 0,
-  skinMedianLuma: 0,
-};
 
 export interface GeometryOptions {
   yawGate: number;
@@ -61,7 +54,6 @@ export function evaluateEyeGeometry(
       earOk: false,
       geometryScore: 0,
       usedSecondaryOcclusion: false,
-      ...APPEARANCE_DEBUG_DEFAULTS,
       ...overrides,
     },
   });
@@ -87,7 +79,6 @@ export function evaluateEyeGeometry(
         earOk: false,
         geometryScore: 0.2,
         usedSecondaryOcclusion: false,
-        ...APPEARANCE_DEBUG_DEFAULTS,
       },
     };
   }
@@ -143,7 +134,6 @@ export function evaluateEyeGeometry(
         earOk,
         geometryScore,
         usedSecondaryOcclusion: false,
-        ...APPEARANCE_DEBUG_DEFAULTS,
       },
     };
   }
@@ -160,13 +150,12 @@ export function evaluateEyeGeometry(
         earOk,
         geometryScore,
         usedSecondaryOcclusion: false,
-        ...APPEARANCE_DEBUG_DEFAULTS,
       },
     };
   }
 
   if (poseOk && !irisInContour && eyeWidthOk) {
-    // Geometry ambiguous — caller may run secondary crop; default NOT_VISIBLE-leaning soft
+    // Geometry ambiguous — caller may run secondary crop
     return {
       state: 'NOT_VISIBLE',
       confidence: 0.55,
@@ -177,7 +166,6 @@ export function evaluateEyeGeometry(
         earOk,
         geometryScore,
         usedSecondaryOcclusion: false,
-        ...APPEARANCE_DEBUG_DEFAULTS,
       },
     };
   }
@@ -192,7 +180,6 @@ export function evaluateEyeGeometry(
       earOk,
       geometryScore,
       usedSecondaryOcclusion: false,
-      ...APPEARANCE_DEBUG_DEFAULTS,
     },
   };
 }
@@ -216,140 +203,59 @@ export function pointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside;
 }
 
-export interface EyeAppearanceEvidence {
-  opaque: boolean;
-  relativeDarkness: number;
-  darkPixelRatio: number;
-  opacityScore: number;
-  eyeMedianLuma: number;
-  skinMedianLuma: number;
-}
-
-interface RegionLuma {
-  median: number;
-  values: Float32Array;
-}
-
 /**
- * Strict appearance check for opaque lenses/covers. It compares an expanded
- * eye/lens crop with nearby skin, so ordinary dark irises and clear frames do
- * not qualify by themselves. Median/coverage metrics tolerate small screen
- * reflections on sunglasses.
+ * Secondary occlusion check — only consulted when geometry already failed.
+ * Requires extreme darkness + near-zero texture; never used alone (clear-glasses safe).
+ * Does NOT override a VISIBLE geometry result.
  */
-export function analyzeEyeAppearance(
+export function secondaryOcclusionEvidence(
   video: HTMLVideoElement | null,
   landmarks: Point[],
   side: EyeSide
-): EyeAppearanceEvidence | null {
-  if (!video || video.readyState < 2 || video.videoWidth === 0) return null;
-  const base = eyeCropRegionFromLandmarks(landmarks, side);
-  if (!base) return null;
+): boolean {
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return false;
+  const region = eyeCropRegionFromLandmarks(landmarks, side);
+  if (!region) return false;
 
   try {
     const canvas = document.createElement('canvas');
-    const outW = 48;
-    const outH = 32;
+    const outW = 32;
+    const outH = 16;
     canvas.width = outW;
     canvas.height = outH;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
+    if (!ctx) return false;
 
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    // Measure the lens/eye core. The previous 1.55× expanded box contained
-    // enough surrounding skin to make black sunglasses average out to zero
-    // opacity. This core still spans most of the sclera on an unobscured eye.
-    const eyeRegion = {
-      x: base.x,
-      y: base.y,
-      w: base.w * 0.92,
-      h: base.h * 1.05,
-    };
-    const skinRegion = {
-      x: base.x,
-      y: base.y + base.w * 1.05,
-      w: base.w * 1.2,
-      h: base.h * 1.15,
-    };
+    const sx = Math.max(0, Math.min((region.x - region.w / 2) * vw, vw - 4));
+    const sy = Math.max(0, Math.min((region.y - region.h / 2) * vh, vh - 4));
+    const sw = Math.max(4, Math.min(region.w * vw, vw - sx));
+    const sh = Math.max(4, Math.min(region.h * vh, vh - sy));
 
-    const eye = measureLumaRegion(ctx, video, eyeRegion, vw, vh, outW, outH);
-    const skin = measureLumaRegion(ctx, video, skinRegion, vw, vh, outW, outH);
-    if (!eye || !skin || skin.median < 45) return null;
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+    const data = ctx.getImageData(0, 0, outW, outH).data;
 
-    return classifyEyeAppearance(eye.median, skin.median, eye.values);
+    let sum = 0;
+    const gray = new Float32Array(outW * outH);
+    for (let i = 0; i < outW * outH; i++) {
+      const g = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+      gray[i] = g;
+      sum += g;
+    }
+    const mean = sum / gray.length;
+    let varSum = 0;
+    for (let i = 0; i < gray.length; i++) {
+      const d = gray[i] - mean;
+      varSum += d * d;
+    }
+    const variance = varSum / gray.length;
+
+    // Opaque cover: very dark AND nearly flat. Clear glasses / open eyes fail this combo.
+    return mean < 35 && variance < 40;
   } catch {
-    return null;
+    return false;
   }
-}
-
-function measureLumaRegion(
-  ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
-  region: { x: number; y: number; w: number; h: number },
-  vw: number,
-  vh: number,
-  outW: number,
-  outH: number
-): RegionLuma | null {
-  const sx = Math.max(0, Math.min((region.x - region.w / 2) * vw, vw - 4));
-  const sy = Math.max(0, Math.min((region.y - region.h / 2) * vh, vh - 4));
-  const sw = Math.max(4, Math.min(region.w * vw, vw - sx));
-  const sh = Math.max(4, Math.min(region.h * vh, vh - sy));
-  if (sw <= 4 || sh <= 4) return null;
-
-  ctx.clearRect(0, 0, outW, outH);
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
-  const data = ctx.getImageData(0, 0, outW, outH).data;
-  const values = new Float32Array(outW * outH);
-  for (let i = 0; i < values.length; i++) {
-    values[i] =
-      0.299 * data[i * 4] +
-      0.587 * data[i * 4 + 1] +
-      0.114 * data[i * 4 + 2];
-  }
-  const sorted = Array.from(values).sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const median =
-    sorted.length % 2 === 0
-      ? (sorted[mid - 1] + sorted[mid]) / 2
-      : sorted[mid];
-  return { median, values };
-}
-
-const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-
-/** Pure appearance classifier used by the browser sampler and unit tests. */
-export function classifyEyeAppearance(
-  eyeMedian: number,
-  skinMedian: number,
-  eyePixels: ArrayLike<number>
-): EyeAppearanceEvidence {
-  const relativeDarkness = clamp01((skinMedian - eyeMedian) / Math.max(skinMedian, 1));
-  const darkCutoff = Math.max(8, Math.min(skinMedian * 0.68, skinMedian - 22));
-  let darkCount = 0;
-  for (let i = 0; i < eyePixels.length; i++) {
-    if (eyePixels[i] < darkCutoff) darkCount += 1;
-  }
-  const darkPixelRatio = eyePixels.length ? darkCount / eyePixels.length : 0;
-
-  const darknessScore = clamp01((relativeDarkness - 0.18) / 0.42);
-  const coverageScore = clamp01((darkPixelRatio - 0.4) / 0.5);
-  const opacityScore = 0.55 * darknessScore + 0.45 * coverageScore;
-
-  return {
-    // Both a large relative drop and broad dark coverage are required.
-    // Clear prescription glasses should fail at least one condition.
-    opaque:
-      skinMedian >= 45 &&
-      relativeDarkness >= 0.32 &&
-      darkPixelRatio >= 0.64 &&
-      opacityScore >= 0.65,
-    relativeDarkness,
-    darkPixelRatio,
-    opacityScore,
-    eyeMedianLuma: eyeMedian,
-    skinMedianLuma: skinMedian,
-  };
 }
 
 export class LandmarkEyeVisibilityBackend implements EyeVisibilityBackend {
@@ -360,53 +266,36 @@ export class LandmarkEyeVisibilityBackend implements EyeVisibilityBackend {
       baselinePitch: input.baselinePitch,
     });
 
-    // Missing face / unreliable pose cannot produce a trustworthy crop.
-    if (geo.state === 'UNKNOWN' && !geo.debug.poseOk) {
+    // Geometry says VISIBLE or UNKNOWN → trust it. Appearance never overrides VISIBLE
+    // (that was the Point A change that false-positived on clear glasses).
+    if (geo.state === 'VISIBLE' || geo.state === 'UNKNOWN') {
       return geo;
     }
 
-    // MediaPipe can hallucinate complete iris/eyelid geometry through opaque
-    // sunglasses. Appearance must therefore also be checked when geometry says
-    // VISIBLE, but only strict eye-vs-skin opacity can override it.
-    const appearance = analyzeEyeAppearance(input.video, input.landmarks, input.side);
-    const debug = appearance
-      ? {
-          ...geo.debug,
-          usedSecondaryOcclusion: true,
-          relativeDarkness: appearance.relativeDarkness,
-          darkPixelRatio: appearance.darkPixelRatio,
-          opacityScore: appearance.opacityScore,
-          eyeMedianLuma: appearance.eyeMedianLuma,
-          skinMedianLuma: appearance.skinMedianLuma,
-        }
-      : geo.debug;
-
-    if (appearance?.opaque) {
+    // Geometry says NOT_VISIBLE — confirm with secondary only when available;
+    // if secondary cannot run, keep geometry decision for collapsed eyes.
+    const secondary = secondaryOcclusionEvidence(input.video, input.landmarks, input.side);
+    if (secondary) {
       return {
         state: 'NOT_VISIBLE',
-        confidence: Math.max(0.75, appearance.opacityScore),
-        debug,
+        confidence: Math.min(1, geo.confidence + 0.2),
+        debug: { ...geo.debug, usedSecondaryOcclusion: true },
       };
     }
 
-    if (geo.state === 'VISIBLE') {
-      return { ...geo, debug };
-    }
-
-    // Geometry remains authoritative for a collapsed eye with missing iris.
     if (!geo.debug.irisInContour && geo.debug.poseOk && !geo.debug.eyeWidthOk) {
-      return { ...geo, debug };
+      return geo;
     }
 
     if (!geo.debug.irisInContour && geo.debug.poseOk && geo.debug.eyeWidthOk) {
-      // Ambiguous geometry without opaque appearance: avoid a false covering alert.
+      // Ambiguous — prefer UNKNOWN over alarming clear glasses / landmark jitter
       return {
         state: 'UNKNOWN',
         confidence: 0.45,
-        debug,
+        debug: { ...geo.debug, usedSecondaryOcclusion: false },
       };
     }
 
-    return { ...geo, debug };
+    return geo;
   }
 }
