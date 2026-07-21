@@ -43,7 +43,7 @@ export const calculateEAR = (eyeLandmarks: Point[]): number => {
 // Calculate Mouth Aspect Ratio (MAR) for yawn detection
 // Same geometry as EAR: average vertical lip distance over horizontal mouth width.
 // Expected point order: [left_corner, top_1, top_2, right_corner, bottom_2, bottom_1]
-// Closed mouth ~0.0-0.1, talking ~0.3-0.5, yawning typically > 0.6
+// Closed mouth ~0.0-0.1, talking ~0.3-0.45, yawning typically >= 0.45
 export const calculateMAR = (mouthLandmarks: Point[]): number => {
   return calculateEAR(mouthLandmarks);
 };

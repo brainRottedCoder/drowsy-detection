@@ -86,8 +86,10 @@ export const DEFAULT_DETECTION: DetectionSettings = {
   pitchGateDelta: 0.14,
   lookAwayDistractionMs: 4000,
   headPoseScoreRange: 0.35,
-  yawnMarThreshold: 0.6,
-  yawnFramesThreshold: 20,
+  // Lower MAR / fewer frames = more sensitive yawn detection.
+  // Closed ~0.0–0.1, talking ~0.3–0.45, yawning typically ≥ 0.45.
+  yawnMarThreshold: 0.45,
+  yawnFramesThreshold: 10,
   yawnMemoryMs: 10 * 60_000,
   yawnAlertWindowMs: 60_000,
   yawnAlertCount: 3,
@@ -153,13 +155,32 @@ export const getSettings = (): UserSettings => {
 
   try {
     const parsed = JSON.parse(stored) as Partial<UserSettings>;
-    return {
+    const detection = { ...DEFAULT_DETECTION, ...(parsed.detection ?? {}) };
+
+    // Migrate prior less-sensitive yawn defaults so existing installs pick up the change.
+    if (detection.yawnMarThreshold >= 0.6) {
+      detection.yawnMarThreshold = DEFAULT_DETECTION.yawnMarThreshold;
+    }
+    if (detection.yawnFramesThreshold >= 20) {
+      detection.yawnFramesThreshold = DEFAULT_DETECTION.yawnFramesThreshold;
+    }
+
+    const settings: UserSettings = {
       ...DEFAULT_SETTINGS,
       ...parsed,
-      detection: { ...DEFAULT_DETECTION, ...(parsed.detection ?? {}) },
+      detection,
       scoreWeights: { ...DEFAULT_SCORE_WEIGHTS, ...(parsed.scoreWeights ?? {}) },
       alertLevels: { ...DEFAULT_ALERT_LEVELS, ...(parsed.alertLevels ?? {}) },
     };
+
+    if (
+      parsed.detection?.yawnMarThreshold !== detection.yawnMarThreshold ||
+      parsed.detection?.yawnFramesThreshold !== detection.yawnFramesThreshold
+    ) {
+      localStorage.setItem(KEYS.SETTINGS, JSON.stringify(settings));
+    }
+
+    return settings;
   } catch {
     return getDefaultSettings();
   }
