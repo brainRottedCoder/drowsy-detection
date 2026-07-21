@@ -7,8 +7,8 @@ import { useFaceLandmarks } from '../../hooks/useFaceLandmarks';
 import { useDrowsiness } from '../../hooks/useDrowsiness';
 import { useEyeVisibility } from '../../hooks/useEyeVisibility';
 import { CameraViewport } from '../../components/CameraViewport/CameraViewport';
-import { StatusCard } from '../../components/StatusCard/StatusCard';
 import { DetectionActivityPanel } from '../../components/DetectionActivityPanel/DetectionActivityPanel';
+import { ResultsStatsPanel } from '../../components/ResultsStatsPanel/ResultsStatsPanel';
 import { AlertModal } from '../../components/AlertModal/AlertModal';
 import { CalibrationModal } from '../../components/CalibrationModal/CalibrationModal';
 import { Button } from '../../components/ui/Button';
@@ -16,7 +16,7 @@ import { useAppContext } from '../../context/AppContext';
 
 export default function MonitorPage() {
   const { videoRef, permissionGranted, error: cameraError } = useCamera();
-  const { landmarks, isReady: isModelReady } = useFaceLandmarks(videoRef);
+  const { landmarks, blendshapes, isReady: isModelReady } = useFaceLandmarks(videoRef);
   const {
     alertLevel,
     drowsinessScore,
@@ -32,19 +32,13 @@ export default function MonitorPage() {
     isCalibrating,
     startCalibration,
     resetState,
-  } = useDrowsiness(landmarks);
+  } = useDrowsiness(landmarks, blendshapes);
   const {
     left: leftEyeVisibility,
     right: rightEyeVisibility,
     eyesNotClearlyVisible,
-    confidence: eyeVisibilityConfidence,
     debug: eyeVisibilityDebug,
   } = useEyeVisibility(videoRef, landmarks);
-
-  const statusCardStatus =
-    alertLevel === 'CRITICAL' ? 'DROWSY' :
-    alertLevel === 'WARNING' ? 'WARNING' :
-    alertLevel === 'CAUTION' ? 'CAUTION' : 'OK';
 
   const { calibration } = useAppContext();
   const [showCalibrationModal, setShowCalibrationModal] = useState(false);
@@ -151,7 +145,7 @@ export default function MonitorPage() {
       {/* Main Grid */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
 
-        {/* Left Column: Camera & Status (8 cols) */}
+        {/* Left Column: Camera + Detection Analysis */}
         <div className="lg:col-span-8 flex flex-col gap-4 md:gap-6">
           {/* Camera View */}
           <div className="relative aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-slate-800">
@@ -216,66 +210,22 @@ export default function MonitorPage() {
             </div>
           </div>
 
-          {/* Status Cards Row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-40">
-            <StatusCard
-              status={statusCardStatus}
-              score={drowsinessScore}
-              ear={currentEAR}
-              mar={currentMAR}
-              isYawning={isYawning}
-              blinkRate={blinkRate}
-            />
-
-            {/* Mini Stats / Info */}
-            <div className="bg-slate-800 rounded-2xl p-6 text-slate-300 flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm font-medium uppercase tracking-wider opacity-70">Session Stats</h3>
-                <div className="mt-2 flex justify-between items-end">
-                  <div>
-                    <div className="text-2xl font-bold text-white">01:24:30</div>
-                    <div className="text-xs">Monitoring Time</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-2xl font-bold text-white">{yawnCount}</div>
-                    <div className="text-xs">Yawns</div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex justify-between items-center text-xs opacity-50">
-                <span>Model: MediaPipe FaceMesh (Client-side)</span>
-                <span className={eyesNotClearlyVisible ? 'text-indigo-400 opacity-100' : ''}>
-                  Eyes {leftEyeVisibility === 'VISIBLE' && rightEyeVisibility === 'VISIBLE' ? 'visible' : leftEyeVisibility === 'NOT_VISIBLE' || rightEyeVisibility === 'NOT_VISIBLE' ? 'blocked' : 'uncertain'} ({Math.round(eyeVisibilityConfidence * 100)}%)
-                </span>
-              </div>
-              <div className="flex justify-between items-center text-xs opacity-50 mt-1">
-                <span>Driver: {facePresence === 'PRESENT' ? 'In frame' : facePresence === 'FACE_LOST' ? 'Tracking...' : 'Not visible'}</span>
-                {isDistracted && <span className="text-amber-400 opacity-100">Distracted</span>}
-                {isYawnAlert && <span className="text-orange-400 opacity-100">Yawn alert</span>}
-              </div>
-              {showDebug && eyeVisibilityDebug && (
-                <div className="mt-2 rounded-lg bg-black/30 p-2 font-mono text-[10px] leading-relaxed text-indigo-200">
-                  <div>
-                    L {leftEyeVisibility} iris={eyeVisibilityDebug.left.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.left.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.left.poseOk ? 'Y' : 'N'}
-                    {eyeVisibilityDebug.left.onnxReady
-                      ? ` onnx=${eyeVisibilityDebug.left.onnxScore?.toFixed(2) ?? '?'} opaque=${eyeVisibilityDebug.left.onnxOpaque ? 'Y' : 'N'} agree=${eyeVisibilityDebug.left.agree ? 'Y' : 'N'}`
-                      : ' onnx=…'}
-                  </div>
-                  <div>
-                    R {rightEyeVisibility} iris={eyeVisibilityDebug.right.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.right.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.right.poseOk ? 'Y' : 'N'}
-                    {eyeVisibilityDebug.right.onnxReady
-                      ? ` onnx=${eyeVisibilityDebug.right.onnxScore?.toFixed(2) ?? '?'} opaque=${eyeVisibilityDebug.right.onnxOpaque ? 'Y' : 'N'} agree=${eyeVisibilityDebug.right.agree ? 'Y' : 'N'}`
-                      : ' onnx=…'}
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* Detection Analysis — below camera */}
+          <div className="min-h-[320px] lg:min-h-[380px]">
+            <DetectionActivityPanel detection={detectionSnapshot} />
           </div>
         </div>
 
-        {/* Right Column: Detection analysis & activity logs */}
+        {/* Right Column: Results Stats */}
         <div className="lg:col-span-4 h-full min-h-[300px]">
-          <DetectionActivityPanel detection={detectionSnapshot} />
+          <ResultsStatsPanel
+            drowsinessScore={drowsinessScore}
+            yawnCount={yawnCount}
+            blinkRate={blinkRate}
+            facePresence={facePresence}
+            sunglassesDetected={onnxReady ? onnxSaysOpaque : eyesNotClearlyVisible}
+            sunglassesReady={onnxReady || facePresence === 'PRESENT'}
+          />
         </div>
       </div>
 

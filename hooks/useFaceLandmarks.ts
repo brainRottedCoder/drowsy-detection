@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 // We use a simplified interface for the hook
 interface UseFaceLandmarksReturn {
   landmarks: any[]; // Raw landmarks
+  /** MediaPipe face blendshape scores keyed by category name (e.g. eyeBlinkLeft). */
+  blendshapes: Record<string, number>;
   isReady: boolean;
   error: string | null;
 }
@@ -52,6 +54,21 @@ const withQuietTfLiteLogs = async <T>(fn: () => Promise<T>): Promise<T> => {
   }
 };
 
+const blendshapeMapFromResults = (results: any): Record<string, number> => {
+  const faceShapes = results?.faceBlendshapes?.[0];
+  const categories = faceShapes?.categories ?? faceShapes?.classifications ?? [];
+  if (!Array.isArray(categories) || categories.length === 0) return {};
+
+  const map: Record<string, number> = {};
+  for (const category of categories) {
+    const name = category?.categoryName || category?.displayName || category?.name;
+    if (typeof name === 'string' && typeof category?.score === 'number') {
+      map[name] = category.score;
+    }
+  }
+  return map;
+};
+
 export const useFaceLandmarks = (
   videoRef: React.RefObject<HTMLVideoElement | null>,
   isEnabled: boolean = true
@@ -59,6 +76,7 @@ export const useFaceLandmarks = (
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [landmarks, setLandmarks] = useState<any[]>([]);
+  const [blendshapes, setBlendshapes] = useState<Record<string, number>>({});
 
   const faceLandmarkerRef = useRef<any | null>(null);
   const requestRef = useRef<number>(0);
@@ -137,8 +155,10 @@ export const useFaceLandmarks = (
 
         if (results.faceLandmarks && results.faceLandmarks.length > 0) {
           setLandmarks(results.faceLandmarks[0]);
+          setBlendshapes(blendshapeMapFromResults(results));
         } else {
           setLandmarks([]);
+          setBlendshapes({});
         }
       }
     }
@@ -152,5 +172,5 @@ export const useFaceLandmarks = (
     return () => cancelAnimationFrame(requestRef.current);
   }, [isReady, isEnabled]);
 
-  return { landmarks, isReady, error };
+  return { landmarks, blendshapes, isReady, error };
 };

@@ -282,7 +282,7 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
           <MetricRow label="Drowsiness score" value={`${Math.round(detection.drowsinessScore)}%`} />
           <MetricRow label="EAR (eye aspect)" value={detection.currentEAR.toFixed(3)} />
           <MetricRow label="MAR (mouth aspect)" value={detection.currentMAR.toFixed(3)} />
-          <MetricRow label="Blink rate" value={`${Math.round(detection.blinkRate)} / min`} />
+          <MetricRow label="Blink rate (last 1 min)" value={`${Math.round(detection.blinkRate)}`} />
           <MetricRow label="Yawn count" value={String(detection.yawnCount)} />
           <MetricRow
             label="L / R eye"

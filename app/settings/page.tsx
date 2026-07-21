@@ -369,7 +369,7 @@ export default function SettingsPage() {
               max={800}
               step={10}
               unit="ms"
-              hint="Closures longer than this become eyelid droops."
+              hint="Closures longer than this become eyelid droops. Natural blinks are often 100–500ms."
               onChange={v => setDetection({ blinkMaxMs: Math.round(v) })}
             />
             <NumberRow

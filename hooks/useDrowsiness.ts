@@ -44,7 +44,18 @@ interface UseDrowsinessReturn {
   resetState: () => void;
 }
 
-export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
+/** Blendshape enter/exit for eyeBlinkLeft/Right (MediaPipe 0–1). */
+const BLINK_ENTER = 0.40;
+const BLINK_EXIT = 0.25;
+/** Ignore only true zero-duration glitches; single-frame blendshape blinks are valid. */
+const MIN_BLINK_MS = 0;
+/** Cap single-blink contribution so long closures don't count as blinks. */
+const DEFAULT_BLINK_MAX_MS = 550;
+
+export const useDrowsiness = (
+  landmarks: any[],
+  blendshapes: Record<string, number> = {}
+): UseDrowsinessReturn => {
   const { calibration, updateCalibration, settings } = useAppContext();
   const { presence: facePresence } = useFacePresence(landmarks);
   const d = settings.detection;
@@ -74,6 +85,8 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
   const closedSinceRef = useRef<number | null>(null);
   const eyesClosedLatchedRef = useRef(false);
   const closureIntervalsRef = useRef<ClosureInterval[]>([]);
+  /** Completed blinks only — used for blinks/min (kept separate from PERCLOS closures). */
+  const blinkEventsRef = useRef<BlinkStat[]>([]);
   const monitoringStartRef = useRef<number>(Date.now());
 
   const lookAwaySinceRef = useRef<number | null>(null);
@@ -96,13 +109,19 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
 
   const processFrame = useCallback(() => {
     if (!landmarks || landmarks.length === 0) {
-      closedSinceRef.current = null;
+      // Face dropped — finish any open blink so it still counts.
+      if (closedSinceRef.current !== null) {
+        const now = Date.now();
+        const blinkMaxMs = Math.max(100, d.blinkMaxMs);
+        const microsleepMs = Math.max(blinkMaxMs + 100, d.microsleepMs);
+        finalizeOpenEyes(now, blinkMaxMs, microsleepMs);
+      }
       lookAwaySinceRef.current = null;
       return;
     }
 
     const now = Date.now();
-    const blinkMaxMs = Math.max(100, d.blinkMaxMs);
+    const blinkMaxMs = Math.max(100, d.blinkMaxMs ?? DEFAULT_BLINK_MAX_MS);
     const microsleepMs = Math.max(blinkMaxMs + 100, d.microsleepMs);
     const perclosWindowMs = Math.max(5000, d.perclosWindowMs);
     const blinkStatsWindowMs = Math.max(5000, d.blinkStatsWindowMs);
@@ -136,7 +155,8 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
 
       const elapsed = now - calibrationStartRef.current;
       setCalibrationProgress(Math.min(100, (elapsed / 5000) * 100));
-      trackClosureForCalibration(avgEAR, now, blinkMaxMs);
+      // Prefer blendshapes during calibration too — more reliable blink samples.
+      trackBlinkSignal(resolveEyesClosed(avgEAR, blendshapes), now, blinkMaxMs, microsleepMs, true);
 
       if (elapsed >= 5000) {
         finishCalibration();
@@ -147,9 +167,13 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     const pitchDelta = Math.abs(pitch - calibration.baselinePitch);
     const poseUnreliable = isLookingAway || pitchDelta > pitchGate;
 
+    // Blink counting must NOT be gated by pose — slight pitch/yaw noise was
+    // preventing every blink from registering. Pose only affects distraction UI
+    // and long-closure (PERCLOS / microsleep) confidence.
+    const eyesClosed = resolveEyesClosed(avgEAR, blendshapes);
+    trackBlinkSignal(eyesClosed, now, blinkMaxMs, microsleepMs, false);
+
     if (poseUnreliable) {
-      closedSinceRef.current = null;
-      eyesClosedLatchedRef.current = false;
       if (isLookingAway) {
         if (lookAwaySinceRef.current === null) lookAwaySinceRef.current = now;
         setIsDistracted(now - lookAwaySinceRef.current > lookAwayMs);
@@ -160,7 +184,6 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     } else {
       lookAwaySinceRef.current = null;
       setIsDistracted(false);
-      updateClosureTracking(leftEAR, rightEAR, now, blinkMaxMs, microsleepMs);
     }
 
     lastPitchRef.current = pitch;
@@ -189,7 +212,9 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     );
 
     const activeMicrosleep =
-      closedSinceRef.current !== null && now - closedSinceRef.current >= microsleepMs;
+      !poseUnreliable &&
+      closedSinceRef.current !== null &&
+      now - closedSinceRef.current >= microsleepMs;
     setIsMicrosleep(activeMicrosleep);
 
     computeScoreAndLevel(now, activeMicrosleep, avgEAR, yaw, pitch, {
@@ -199,6 +224,7 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     });
   }, [
     landmarks,
+    blendshapes,
     isCalibrating,
     calibration.baselinePitch,
     calibration.baselineYaw,
@@ -212,74 +238,114 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     levels,
   ]);
 
-  const updateClosureTracking = (
-    leftEAR: number,
-    rightEAR: number,
+  const resolveEyesClosed = (avgEAR: number, shapes: Record<string, number>): boolean => {
+    const leftBlink = shapes.eyeBlinkLeft;
+    const rightBlink = shapes.eyeBlinkRight;
+    const hasBlendshapes =
+      typeof leftBlink === 'number' || typeof rightBlink === 'number';
+
+    if (hasBlendshapes) {
+      // Use the stronger eye — partial/asymmetric blinks still count.
+      const blinkScore = Math.max(leftBlink ?? 0, rightBlink ?? 0);
+      if (!eyesClosedLatchedRef.current) {
+        return blinkScore >= BLINK_ENTER;
+      }
+      return blinkScore > BLINK_EXIT;
+    }
+
+    // EAR fallback when blendshapes aren't available yet.
+    const closeAt = Math.max(
+      calibration.threshold || 0.18,
+      (calibration.baselineEAR || 0.3) * 0.7
+    );
+    const openAt = closeAt + 0.04;
+
+    if (!eyesClosedLatchedRef.current) {
+      return avgEAR < closeAt;
+    }
+    return avgEAR <= openAt;
+  };
+
+  const classifyClosure = (durationMs: number, blinkMaxMs: number, microsleepMs: number): ClosureInterval['type'] => {
+    if (durationMs >= microsleepMs) return 'microsleep';
+    if (durationMs >= blinkMaxMs) return 'droop';
+    return 'blink';
+  };
+
+  const recordCompletedBlink = (now: number, durationMs: number, blinkMaxMs: number, forCalibration: boolean) => {
+    // Count any completed close→open cycle under blinkMaxMs (incl. single-frame spikes).
+    if (durationMs < MIN_BLINK_MS || durationMs >= blinkMaxMs) return;
+    if (forCalibration) {
+      calibrationBlinkEventsRef.current.push({ timestamp: now, durationMs: Math.max(durationMs, 1) });
+      return;
+    }
+    blinkEventsRef.current.push({ timestamp: now, durationMs: Math.max(durationMs, 1) });
+    // Push UI immediately so the stats panel ticks up as soon as a blink finishes.
+    refreshBlinkRate(now);
+  };
+
+  /** Blink rate = number of blinks completed in the last 60 seconds. */
+  const refreshBlinkRate = (now: number) => {
+    const windowMs = Math.max(5000, d.blinkStatsWindowMs || 60_000);
+    blinkEventsRef.current = blinkEventsRef.current.filter(b => now - b.timestamp < windowMs);
+    const recent = blinkEventsRef.current;
+    setBlinkRate(recent.length);
+    setAvgBlinkDurationMs(
+      recent.length
+        ? recent.reduce((sum, b) => sum + b.durationMs, 0) / recent.length
+        : calibration.baselineBlinkDurationMs
+    );
+  };
+
+  const finalizeOpenEyes = (
     now: number,
     blinkMaxMs: number,
-    microsleepMs: number
+    microsleepMs: number,
+    forCalibration = false
   ) => {
-    const earClosedRatio = clamp(d.earClosedRatio, 0.3, 0.9);
-    const earOpenRatio = clamp(d.earOpenRatio, earClosedRatio + 0.05, 0.95);
-    const earThresholdMax = clamp(d.earThresholdMax, 0.1, 0.4);
-
-    const closeAt = calibration.threshold;
-    const openAt = Math.min(
-      earThresholdMax * 1.15,
-      Math.max(closeAt * (earOpenRatio / earClosedRatio), closeAt + 0.03)
-    );
-
-    let isClosed = eyesClosedLatchedRef.current;
-    if (!eyesClosedLatchedRef.current) {
-      isClosed = leftEAR < closeAt && rightEAR < closeAt;
-    } else {
-      isClosed = !(leftEAR > openAt && rightEAR > openAt);
+    if (closedSinceRef.current === null) {
+      eyesClosedLatchedRef.current = false;
+      return;
     }
+
+    const duration = now - closedSinceRef.current;
+    if (!forCalibration) {
+      const current = closureIntervalsRef.current[closureIntervalsRef.current.length - 1];
+      if (current) {
+        current.end = now;
+        current.type = classifyClosure(duration, blinkMaxMs, microsleepMs);
+      }
+    }
+    recordCompletedBlink(now, duration, blinkMaxMs, forCalibration);
+    closedSinceRef.current = null;
+    eyesClosedLatchedRef.current = false;
+  };
+
+  const trackBlinkSignal = (
+    isClosed: boolean,
+    now: number,
+    blinkMaxMs: number,
+    microsleepMs: number,
+    forCalibration: boolean
+  ) => {
     eyesClosedLatchedRef.current = isClosed;
 
     if (isClosed) {
       if (closedSinceRef.current === null) {
         closedSinceRef.current = now;
-        closureIntervalsRef.current.push({ start: now, end: now, type: 'blink' });
-      } else {
+        if (!forCalibration) {
+          closureIntervalsRef.current.push({ start: now, end: now, type: 'blink' });
+        }
+      } else if (!forCalibration) {
         const duration = now - closedSinceRef.current;
         const current = closureIntervalsRef.current[closureIntervalsRef.current.length - 1];
         if (current) {
           current.end = now;
-          current.type =
-            duration >= microsleepMs ? 'microsleep' : duration >= blinkMaxMs ? 'droop' : 'blink';
+          current.type = classifyClosure(duration, blinkMaxMs, microsleepMs);
         }
       }
-    } else if (closedSinceRef.current !== null) {
-      const duration = now - closedSinceRef.current;
-      const current = closureIntervalsRef.current[closureIntervalsRef.current.length - 1];
-      if (current) {
-        current.end = now;
-        current.type =
-          duration >= microsleepMs ? 'microsleep' : duration >= blinkMaxMs ? 'droop' : 'blink';
-      }
-      closedSinceRef.current = null;
-    }
-  };
-
-  const trackClosureForCalibration = (avgEAR: number, now: number, blinkMaxMs: number) => {
-    const provisionalThreshold =
-      calibrationEARRef.current.length > 5
-        ? deriveClosedThreshold(
-            calibrationEARRef.current.reduce((a, b) => a + b, 0) / calibrationEARRef.current.length,
-            d
-          )
-        : 0.18;
-    const isClosed = avgEAR < provisionalThreshold;
-
-    if (isClosed && closedSinceRef.current === null) {
-      closedSinceRef.current = now;
-    } else if (!isClosed && closedSinceRef.current !== null) {
-      const duration = now - closedSinceRef.current;
-      if (duration < blinkMaxMs) {
-        calibrationBlinkEventsRef.current.push({ timestamp: now, durationMs: duration });
-      }
-      closedSinceRef.current = null;
+    } else {
+      finalizeOpenEyes(now, blinkMaxMs, microsleepMs, forCalibration);
     }
   };
 
@@ -299,18 +365,9 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     const windowMs = Math.min(windows.perclosWindowMs, now - monitoringStartRef.current);
     const perclos = Math.min(1, closedMs / Math.max(windowMs, 1000));
 
-    const recentBlinks = closureIntervalsRef.current.filter(
-      iv =>
-        iv.type === 'blink' &&
-        now - iv.end < windows.blinkStatsWindowMs &&
-        iv.end > iv.start
-    );
-    const currentBlinkRate = recentBlinks.length;
-    const currentAvgBlinkDuration = recentBlinks.length
-      ? recentBlinks.reduce((sum, iv) => sum + (iv.end - iv.start), 0) / recentBlinks.length
-      : calibration.baselineBlinkDurationMs;
-    setBlinkRate(currentBlinkRate);
-    setAvgBlinkDurationMs(currentAvgBlinkDuration);
+    // Blink rate = raw count of blinks in the last 1 minute (rolling window).
+    refreshBlinkRate(now);
+    const currentBlinkRate = blinkEventsRef.current.length;
 
     const blinkRateScore = clamp01(
       Math.abs(currentBlinkRate - calibration.baselineBlinkRate) /
@@ -452,6 +509,7 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     belowLevelSinceRef.current = null;
     setDrowsinessScore(0);
     closureIntervalsRef.current = [];
+    blinkEventsRef.current = [];
     closedSinceRef.current = null;
     eyesClosedLatchedRef.current = false;
     monitoringStartRef.current = Date.now();
@@ -460,6 +518,8 @@ export const useDrowsiness = (landmarks: any[]): UseDrowsinessReturn => {
     yawnTimestampsRef.current = [];
     earScoreHistoryRef.current = [];
     lastPitchRef.current = null;
+    setBlinkRate(0);
+    setAvgBlinkDurationMs(0);
     setIsYawning(false);
     setIsYawnAlert(false);
     setIsMicrosleep(false);

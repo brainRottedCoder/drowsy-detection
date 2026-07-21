@@ -73,14 +73,16 @@ export interface CalibrationData {
 }
 
 export const DEFAULT_DETECTION: DetectionSettings = {
-  blinkMaxMs: 400,
+  // Natural blinks are ~100–500ms; camera lag often stretches them past 400ms.
+  blinkMaxMs: 550,
   microsleepMs: 2000,
   perclosWindowMs: 60_000,
   blinkStatsWindowMs: 60_000,
-  earClosedRatio: 0.55,
-  earOpenRatio: 0.70,
+  // Slightly higher closed ratio → more sensitive blink capture after calibration.
+  earClosedRatio: 0.60,
+  earOpenRatio: 0.75,
   earThresholdMin: 0.12,
-  earThresholdMax: 0.20,
+  earThresholdMax: 0.22,
   earScoreHistory: 8,
   yawGateThreshold: 0.18,
   pitchGateDelta: 0.14,
@@ -128,7 +130,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 
 const DEFAULT_CALIBRATION: CalibrationData = {
   baselineEAR: 0.30,
-  threshold: 0.165,
+  threshold: 0.18,
   isCalibrated: false,
   baselineBlinkRate: 17,
   baselineBlinkDurationMs: 250,
@@ -164,6 +166,16 @@ export const getSettings = (): UserSettings => {
     if (detection.yawnFramesThreshold >= 20) {
       detection.yawnFramesThreshold = DEFAULT_DETECTION.yawnFramesThreshold;
     }
+    // Migrate older blink timing that under-counted natural blinks.
+    if (detection.blinkMaxMs <= 400) {
+      detection.blinkMaxMs = DEFAULT_DETECTION.blinkMaxMs;
+    }
+    if (detection.earClosedRatio <= 0.55) {
+      detection.earClosedRatio = DEFAULT_DETECTION.earClosedRatio;
+    }
+    if (detection.earOpenRatio <= 0.70) {
+      detection.earOpenRatio = DEFAULT_DETECTION.earOpenRatio;
+    }
 
     const settings: UserSettings = {
       ...DEFAULT_SETTINGS,
@@ -175,7 +187,10 @@ export const getSettings = (): UserSettings => {
 
     if (
       parsed.detection?.yawnMarThreshold !== detection.yawnMarThreshold ||
-      parsed.detection?.yawnFramesThreshold !== detection.yawnFramesThreshold
+      parsed.detection?.yawnFramesThreshold !== detection.yawnFramesThreshold ||
+      parsed.detection?.blinkMaxMs !== detection.blinkMaxMs ||
+      parsed.detection?.earClosedRatio !== detection.earClosedRatio ||
+      parsed.detection?.earOpenRatio !== detection.earOpenRatio
     ) {
       localStorage.setItem(KEYS.SETTINGS, JSON.stringify(settings));
     }
@@ -198,8 +213,8 @@ export const getCalibration = (): CalibrationData => {
 
   const parsed = { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } as CalibrationData;
 
-  if (parsed.threshold > 0.20) {
-    const migrated = Math.min(0.20, Math.max(0.12, parsed.baselineEAR * 0.55));
+  if (parsed.threshold > 0.22) {
+    const migrated = Math.min(0.22, Math.max(0.12, parsed.baselineEAR * 0.60));
     parsed.threshold = migrated;
     localStorage.setItem(KEYS.CALIBRATION, JSON.stringify(parsed));
   }
