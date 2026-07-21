@@ -25,3 +25,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Offline glasses-detector export env (run export_opaque_classifier.py once)
+.venv-glasses/
+venv/
+
+# onnxruntime-web WASM copied by scripts/copy-ort-wasm.mjs (postinstall)
+/public/ort/

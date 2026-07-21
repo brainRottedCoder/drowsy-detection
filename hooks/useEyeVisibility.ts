@@ -19,6 +19,10 @@ const UNKNOWN_DEBUG: EyeVisibilityDebugFlags = {
   earOk: false,
   geometryScore: 0,
   usedSecondaryOcclusion: false,
+  onnxScore: null,
+  onnxOpaque: null,
+  agree: null,
+  onnxReady: false,
 };
 
 function combineOverall(left: EyeVisibilityState, right: EyeVisibilityState): EyeVisibilityState {

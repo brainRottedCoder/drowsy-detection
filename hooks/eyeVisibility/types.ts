@@ -13,6 +13,17 @@ export interface EyeVisibilityDebugFlags {
   geometryScore: number;
   /** True when secondary crop evidence confirmed geometry failure. */
   usedSecondaryOcclusion: boolean;
+  /** ONNX P(opaque) after sigmoid; null if model not ready / failed. */
+  onnxScore?: number | null;
+  /** Whether onnxScore >= threshold. */
+  onnxOpaque?: boolean | null;
+  /**
+   * Heuristic opaque intent vs ONNX opaque — frequent disagreement means
+   * threshold or preprocessing needs tuning. null if ONNX unavailable.
+   */
+  agree?: boolean | null;
+  /** True once the ONNX session loaded and scored this sample. */
+  onnxReady?: boolean;
 }
 
 export interface EyeVisibilitySample {
@@ -31,9 +42,9 @@ export interface EyeVisibilityEvaluateInput {
 }
 
 /**
- * Pluggable backend. Landmark is sync; a future TFLite backend may return a Promise.
- * Expected TFLite crop: 96×64 RGB, classes [VISIBLE, NOT_VISIBLE, UNKNOWN],
- * model path: public/models/eye_visibility.tflite
+ * Pluggable backend. Landmark is sync; ONNX combined wrapper is async.
+ * Opaque sunglasses booster: public/models/glasses_opaque.onnx (self-hosted).
+ * Future TFLite crop path (optional): 96×64 RGB, public/models/eye_visibility.tflite
  */
 export interface EyeVisibilityBackend {
   evaluate(input: EyeVisibilityEvaluateInput): EyeVisibilitySample | Promise<EyeVisibilitySample>;

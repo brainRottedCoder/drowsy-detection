@@ -258,6 +258,10 @@ export function secondaryOcclusionEvidence(
   }
 }
 
+export function createLandmarkBackend(): EyeVisibilityBackend {
+  return new LandmarkEyeVisibilityBackend();
+}
+
 export class LandmarkEyeVisibilityBackend implements EyeVisibilityBackend {
   evaluate(input: EyeVisibilityEvaluateInput): EyeVisibilitySample {
     const geo = evaluateEyeGeometry(input.landmarks, input.side, {

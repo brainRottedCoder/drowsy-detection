@@ -1,16 +1,24 @@
 import type { EyeVisibilityBackend } from './types';
-import { LandmarkEyeVisibilityBackend } from './landmarkBackend';
+import { createLandmarkBackend } from './landmarkBackend';
+import { createCombinedOpaqueBackend } from './onnxOpaqueBackend';
 
 /**
  * Factory for the eye-visibility backend.
  *
- * Today: always landmark/geometry.
- * Future: if `public/models/eye_visibility.tflite` is present (or a settings flag),
- * return a TFLite backend that classifies 96×64 eye crops into
- * [VISIBLE, NOT_VISIBLE, UNKNOWN].
+ * Landmark/pixel heuristic is primary and authoritative for state.
+ * ONNX sunglasses classifier is a confidence booster only (never overrides state).
+ * Do not gate useDrowsiness scoring on this until empirical testing (clear glasses
+ * stay VISIBLE; dark sunglasses show debug.agree with the heuristic).
  */
 export function createEyeVisibilityBackend(): EyeVisibilityBackend {
-  // Placeholder for future model switch:
-  // if (typeof window !== 'undefined' && window.__EYE_VISIBILITY_TFLITE__) { ... }
-  return new LandmarkEyeVisibilityBackend();
+  const heuristic = createLandmarkBackend();
+  return createCombinedOpaqueBackend(heuristic, {
+    modelUrl: '/models/glasses_opaque.onnx',
+    threshold: 0.5, // tune after empirical clear-vs-dark glasses tests
+  });
+}
+
+/** Alias matching integration notes. */
+export function createBackend(): EyeVisibilityBackend {
+  return createEyeVisibilityBackend();
 }

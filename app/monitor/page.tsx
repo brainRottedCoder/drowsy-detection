@@ -102,6 +102,24 @@ export default function MonitorPage() {
     resetState();
   };
 
+  const onnxLeft = eyeVisibilityDebug?.left;
+  const onnxRight = eyeVisibilityDebug?.right;
+  const onnxReady = onnxLeft?.onnxReady === true || onnxRight?.onnxReady === true;
+  const onnxLScore = typeof onnxLeft?.onnxScore === 'number' ? onnxLeft.onnxScore : null;
+  const onnxRScore = typeof onnxRight?.onnxScore === 'number' ? onnxRight.onnxScore : null;
+  const onnxLOpaque = onnxLeft?.onnxOpaque === true;
+  const onnxROpaque = onnxRight?.onnxOpaque === true;
+  const onnxAvg =
+    onnxLScore != null && onnxRScore != null
+      ? (onnxLScore + onnxRScore) / 2
+      : onnxLScore ?? onnxRScore;
+  const onnxSaysOpaque = onnxLOpaque || onnxROpaque;
+  const onnxLabel = !onnxReady
+    ? 'WAITING'
+    : onnxSaysOpaque
+      ? 'SUNGLASSES / OPAQUE'
+      : 'CLEAR / NOT OPAQUE';
+
   return (
     <div className="min-h-screen bg-slate-900 p-4 md:p-6 flex flex-col">
       {/* Header */}
@@ -239,9 +257,15 @@ export default function MonitorPage() {
                 <div className="mt-2 rounded-lg bg-black/30 p-2 font-mono text-[10px] leading-relaxed text-indigo-200">
                   <div>
                     L {leftEyeVisibility} iris={eyeVisibilityDebug.left.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.left.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.left.poseOk ? 'Y' : 'N'}
+                    {eyeVisibilityDebug.left.onnxReady
+                      ? ` onnx=${eyeVisibilityDebug.left.onnxScore?.toFixed(2) ?? '?'} opaque=${eyeVisibilityDebug.left.onnxOpaque ? 'Y' : 'N'} agree=${eyeVisibilityDebug.left.agree ? 'Y' : 'N'}`
+                      : ' onnx=…'}
                   </div>
                   <div>
                     R {rightEyeVisibility} iris={eyeVisibilityDebug.right.irisInContour ? 'Y' : 'N'} w={eyeVisibilityDebug.right.eyeWidthOk ? 'Y' : 'N'} pose={eyeVisibilityDebug.right.poseOk ? 'Y' : 'N'}
+                    {eyeVisibilityDebug.right.onnxReady
+                      ? ` onnx=${eyeVisibilityDebug.right.onnxScore?.toFixed(2) ?? '?'} opaque=${eyeVisibilityDebug.right.onnxOpaque ? 'Y' : 'N'} agree=${eyeVisibilityDebug.right.agree ? 'Y' : 'N'}`
+                      : ' onnx=…'}
                   </div>
                 </div>
               )}
@@ -271,6 +295,61 @@ export default function MonitorPage() {
         }}
         onAcknowledge={handleAcknowledgeAlert}
       />
+
+      {/* TEMP test panel — ONNX sunglasses score only (does not drive L/R VISIBLE yet) */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[min(100vw-2rem,20rem)] rounded-xl border border-cyan-500/40 bg-slate-950/95 p-3 shadow-xl backdrop-blur-sm">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-cyan-300">
+            ONNX test (temp)
+          </p>
+          <span
+            className={
+              onnxReady ? 'text-[10px] font-mono text-emerald-400' : 'text-[10px] font-mono text-amber-400'
+            }
+          >
+            {onnxReady ? 'model live' : 'loading…'}
+          </span>
+        </div>
+        <p
+          className={`mb-2 text-sm font-semibold ${
+            !onnxReady ? 'text-amber-300' : onnxSaysOpaque ? 'text-rose-300' : 'text-emerald-300'
+          }`}
+        >
+          {onnxLabel}
+        </p>
+        <div className="space-y-1 font-mono text-[11px] text-slate-200">
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">L P(opaque)</span>
+            <span>
+              {onnxLScore != null ? onnxLScore.toFixed(3) : '—'}{' '}
+              <span className={onnxLOpaque ? 'text-rose-300' : 'text-emerald-300'}>
+                {onnxLeft?.onnxReady ? (onnxLOpaque ? 'OPAQUE' : 'CLEAR') : '…'}
+              </span>
+            </span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">R P(opaque)</span>
+            <span>
+              {onnxRScore != null ? onnxRScore.toFixed(3) : '—'}{' '}
+              <span className={onnxROpaque ? 'text-rose-300' : 'text-emerald-300'}>
+                {onnxRight?.onnxReady ? (onnxROpaque ? 'OPAQUE' : 'CLEAR') : '…'}
+              </span>
+            </span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Avg</span>
+            <span>{onnxAvg != null ? onnxAvg.toFixed(3) : '—'}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Threshold</span>
+            <span>0.50</span>
+          </div>
+          <div className="mt-1 border-t border-slate-700 pt-1 text-[10px] leading-snug text-slate-500">
+            Face-crop classifier (L/R share one score). Heuristic stays{' '}
+            {leftEyeVisibility}/{rightEyeVisibility} — ONNX does not override it yet.
+          </div>
+        </div>
+      </div>
 
       <CalibrationModal
         isOpen={showCalibrationModal}

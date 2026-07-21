@@ -12,6 +12,11 @@ export interface EyeCropRegion {
   h: number;
 }
 
+/** Sparse face-outline landmarks (MediaPipe Face Landmarker) for a full-face bbox. */
+const FACE_BOUNDS_INDICES = [
+  10, 152, 234, 454, 127, 356, 162, 389, 58, 288, 172, 397, 136, 365, 67, 297,
+];
+
 export function eyeCropRegionFromLandmarks(
   landmarks: Point[],
   side: EyeSide
@@ -38,5 +43,45 @@ export function eyeCropRegionFromLandmarks(
     y: cy,
     w: eyeWidth * 0.9,
     h: eyeWidth * 0.55,
+  };
+}
+
+/**
+ * Full-face crop for glasses-detector (trained on face images, not eye patches).
+ * Returns normalized center + size with light padding.
+ */
+export function faceCropRegionFromLandmarks(landmarks: Point[]): EyeCropRegion | null {
+  if (!landmarks || landmarks.length < 468) return null;
+
+  const pts = FACE_BOUNDS_INDICES.map(i => landmarks[i]).filter(Boolean);
+  if (pts.length < 6) return null;
+
+  let minX = 1;
+  let maxX = 0;
+  let minY = 1;
+  let maxY = 0;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+
+  const w0 = maxX - minX;
+  const h0 = maxY - minY;
+  if (w0 < 0.05 || h0 < 0.05) return null;
+
+  const padX = w0 * 0.18;
+  const padY = h0 * 0.18;
+  minX = Math.max(0, minX - padX);
+  maxX = Math.min(1, maxX + padX);
+  minY = Math.max(0, minY - padY);
+  maxY = Math.min(1, maxY + padY);
+
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    w: maxX - minX,
+    h: maxY - minY,
   };
 }
