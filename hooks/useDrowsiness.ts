@@ -366,13 +366,8 @@ export const useDrowsiness = (
     const perclos = Math.min(1, closedMs / Math.max(windowMs, 1000));
 
     // Blink rate = raw count of blinks in the last 1 minute (rolling window).
+    // Display-only — must not drive drowsiness score / alert level.
     refreshBlinkRate(now);
-    const currentBlinkRate = blinkEventsRef.current.length;
-
-    const blinkRateScore = clamp01(
-      Math.abs(currentBlinkRate - calibration.baselineBlinkRate) /
-        (calibration.baselineBlinkRate || 15)
-    );
 
     const baselineEAR = calibration.baselineEAR || 0.3;
     const rawEarScore = clamp01((baselineEAR - avgEAR) / Math.max(baselineEAR, 0.05));
@@ -400,7 +395,6 @@ export const useDrowsiness = (
     let score =
       (perclos * clamp01(w.perclos) +
         earScore * clamp01(w.ear) +
-        blinkRateScore * clamp01(w.blinkRate) +
         yawnScore * clamp01(w.yawn) +
         headPoseScore * clamp01(w.headPose)) *
       100;

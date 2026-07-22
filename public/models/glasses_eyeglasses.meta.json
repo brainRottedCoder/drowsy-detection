@@ -1,9 +1,9 @@
 {
   "source": "glasses-detector",
-  "kind": "sunglasses",
+  "kind": "eyeglasses",
   "size": "small",
   "task": "classification",
-  "positive_class": "opaque_or_semi_transparent_glasses",
+  "positive_class": "transparent_eyeglasses",
   "input_name": "input",
   "output_name": "logit",
   "input_layout": "NCHW",
@@ -30,7 +30,7 @@
     "type": "logit",
     "activation": "sigmoid",
     "threshold_hint": 0.5,
-    "interpretation": "P(sunglasses)=sigmoid(logit)"
+    "interpretation": "P(eyeglasses)=sigmoid(logit)"
   },
   "combine_with": {
     "eyeglasses": "glasses_eyeglasses.onnx",
@@ -40,6 +40,5 @@
       "transparent": "eyeglasses+ & sunglasses\u2212",
       "opaque": "sunglasses+ (eyeglasses either)"
     }
-  },
-  "legacy_alias_of": "glasses_sunglasses.onnx"
+  }
 }

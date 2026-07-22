@@ -40,6 +40,5 @@
       "transparent": "eyeglasses+ & sunglasses\u2212",
       "opaque": "sunglasses+ (eyeglasses either)"
     }
-  },
-  "legacy_alias_of": "glasses_sunglasses.onnx"
+  }
 }

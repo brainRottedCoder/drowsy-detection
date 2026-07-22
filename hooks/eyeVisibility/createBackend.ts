@@ -3,18 +3,16 @@ import { createLandmarkBackend } from './landmarkBackend';
 import { createCombinedOpaqueBackend } from './onnxOpaqueBackend';
 
 /**
- * Factory for the eye-visibility backend.
- *
- * Landmark/pixel heuristic is primary and authoritative for state.
- * ONNX sunglasses classifier is a confidence booster only (never overrides state).
- * Do not gate useDrowsiness scoring on this until empirical testing (clear glasses
- * stay VISIBLE; dark sunglasses show debug.agree with the heuristic).
+ * Landmark heuristic is primary for VISIBLE/NOT_VISIBLE.
+ * Dual ONNX (eyeglasses + sunglasses) fills 3-way partition debug and
+ * confidence boosts — does not override heuristic state until empirical OK.
  */
 export function createEyeVisibilityBackend(): EyeVisibilityBackend {
   const heuristic = createLandmarkBackend();
   return createCombinedOpaqueBackend(heuristic, {
-    modelUrl: '/models/glasses_opaque.onnx',
-    threshold: 0.5, // tune after empirical clear-vs-dark glasses tests
+    eyeglassesModelUrl: '/models/glasses_eyeglasses.onnx',
+    sunglassesModelUrl: '/models/glasses_sunglasses.onnx',
+    threshold: 0.5,
   });
 }
 

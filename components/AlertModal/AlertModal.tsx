@@ -55,8 +55,7 @@ function buildDetectionList(d: DetectionFlags): string[] {
   if (d.eyesNotClearlyVisible) items.push('Eyes not clearly visible');
   if (d.facePresence === 'FACE_LOST') items.push('Face tracking unstable');
   if (d.facePresence === 'ABSENT') items.push('Driver not in frame');
-  if (d.blinkRate > 30) items.push(`High blink rate (${Math.round(d.blinkRate)}/min)`);
-  if (d.blinkRate > 0 && d.blinkRate < 6) items.push(`Low blink rate (${Math.round(d.blinkRate)}/min)`);
+  // Blink rate is display-only (footer / stats) — do not treat high/low as a warning reason.
   if (d.score >= 30 && items.length === 0) {
     items.push(`Elevated drowsiness score (${Math.round(d.score)}%)`);
   }

@@ -21,6 +21,9 @@ const UNKNOWN_DEBUG: EyeVisibilityDebugFlags = {
   usedSecondaryOcclusion: false,
   onnxScore: null,
   onnxOpaque: null,
+  eyeglassesProb: null,
+  sunglassesProb: null,
+  eyewearPartition: null,
   agree: null,
   onnxReady: false,
 };

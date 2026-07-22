@@ -8,7 +8,7 @@
     "lint": "eslint .",
     "start": "next start",
     "postinstall": "node scripts/copy-ort-wasm.mjs",
-    "export:opaque-onnx": "python export_opaque_classifier.py --size small --out public/models/glasses_opaque.onnx"
+    "export:opaque-onnx": "python export_opaque_classifier.py --size small --out-dir public/models"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

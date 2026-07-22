@@ -103,11 +103,11 @@ export const DEFAULT_DETECTION: DetectionSettings = {
 };
 
 export const DEFAULT_SCORE_WEIGHTS: ScoreWeights = {
-  perclos: 0.40,
-  ear: 0.20,
-  blinkRate: 0.15,
-  yawn: 0.15,
-  headPose: 0.10,
+  perclos: 0.47,
+  ear: 0.23,
+  blinkRate: 0, // display-only; does not contribute to drowsiness score / alerts
+  yawn: 0.18,
+  headPose: 0.12,
 };
 
 export const DEFAULT_ALERT_LEVELS: AlertLevelSettings = {

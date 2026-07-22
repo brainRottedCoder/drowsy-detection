@@ -1,15 +1,13 @@
 /**
- * Secondary ONNX opaque-eyewear signal.
+ * Dual glasses-detector classifiers → 3-way eyewear partition.
  *
- * Heuristic (landmarkBackend) stays primary and authoritative for `state`.
- * This module never overrides state — it only loads glasses-detector's
- * sunglasses classifier and adjusts confidence when signals agree.
+ *   sunglasses+              → opaque      → NOT_VISIBLE (occlusion)
+ *   eyeglasses+ & sunglasses− → transparent → VISIBLE (clear power glasses)
+ *   both−                    → bare         → VISIBLE
+ *   both+ (rare)             → opaque       → NOT_VISIBLE
  *
- * Model: self-hosted at /models/glasses_opaque.onnx (exported offline).
- * Runtime WASM: self-hosted at /ort/ (copied from onnxruntime-web on postinstall).
- *
- * IMPORTANT: score a full-face crop, not per-eye patches. The classifier was
- * trained on faces; tight eye crops always score "opaque" (bare iris ≈ sunglasses).
+ * Full-face crop only (models were trained on faces, not eye patches).
+ * Models: /models/glasses_eyeglasses.onnx + /models/glasses_sunglasses.onnx
  */
 
 import type { InferenceSession, Tensor } from 'onnxruntime-web';
@@ -17,6 +15,7 @@ import type {
   EyeVisibilityBackend,
   EyeVisibilityEvaluateInput,
   EyeVisibilitySample,
+  EyewearPartition,
 } from './types';
 import { faceCropRegionFromLandmarks } from './cropHelpers';
 
@@ -25,28 +24,31 @@ const INPUT_H = 256;
 const MEAN = [0.485, 0.456, 0.406] as const;
 const STD = [0.229, 0.224, 0.225] as const;
 
-/** Matches package.json onnxruntime-web; files live under public/ort/. */
 const DEFAULT_WASM_PATHS = '/ort/';
-const DEFAULT_MODEL_URL = '/models/glasses_opaque.onnx';
+const DEFAULT_EYEGLASSES_URL = '/models/glasses_eyeglasses.onnx';
+const DEFAULT_SUNGLASSES_URL = '/models/glasses_sunglasses.onnx';
 const DEFAULT_THRESHOLD = 0.5;
-/** Confidence boost when heuristic + ONNX both indicate opaque cover. */
+
 const OPAQUE_AGREE_BOOST = 0.18;
-/** Mild boost when both indicate clear/visible eyes. */
 const VISIBLE_AGREE_BOOST = 0.05;
 
 export interface OnnxOpaqueOptions {
+  /** @deprecated Use sunglassesModelUrl. Kept as alias for sunglasses ONNX. */
   modelUrl?: string;
-  /** P(opaque) threshold after sigmoid. Tune empirically (clear glasses must stay VISIBLE). */
+  eyeglassesModelUrl?: string;
+  sunglassesModelUrl?: string;
   threshold?: number;
   wasmPaths?: string;
 }
 
-export interface OnnxOpaqueScore {
-  score: number;
+export interface DualGlassesScore {
+  eyeglassesProb: number;
+  sunglassesProb: number;
+  partition: EyewearPartition;
+  /** True when partition === 'opaque' (sunglasses fires, or both rare). */
   opaque: boolean;
 }
 
-/** WASM-only entry — avoids the default build that fetches *.jsep.mjs (WebGPU). */
 type OrtModule = typeof import('onnxruntime-web/wasm');
 
 let ortModule: OrtModule | null = null;
@@ -59,7 +61,6 @@ async function getOrt(wasmPaths: string): Promise<OrtModule | null> {
   }
   if (!wasmConfigured) {
     ortModule.env.wasm.wasmPaths = wasmPaths;
-    // Single-threaded: no cross-origin isolation / SharedArrayBuffer needed.
     ortModule.env.wasm.numThreads = 1;
     ortModule.env.wasm.proxy = false;
     wasmConfigured = true;
@@ -76,10 +77,19 @@ function sigmoid(x: number): number {
   return z / (1 + z);
 }
 
-/**
- * Full-face crop → 256×256 RGB → ImageNet normalize NCHW.
- */
-function buildFaceOpaqueTensor(
+export function combineEyewearPartition(
+  eyeglassesProb: number,
+  sunglassesProb: number,
+  threshold: number
+): EyewearPartition {
+  const sun = sunglassesProb >= threshold;
+  const eye = eyeglassesProb >= threshold;
+  if (sun) return 'opaque';
+  if (eye) return 'transparent';
+  return 'bare';
+}
+
+function buildFaceTensor(
   ort: OrtModule,
   video: HTMLVideoElement,
   landmarks: EyeVisibilityEvaluateInput['landmarks']
@@ -96,7 +106,6 @@ function buildFaceOpaqueTensor(
   const sw = Math.max(4, Math.min(region.w * vw, vw - sx));
   const sh = Math.max(4, Math.min(region.h * vh, vh - sy));
 
-  // Letterbox into square so we don't stretch the face (aspect matters for this net).
   const canvas = document.createElement('canvas');
   canvas.width = INPUT_W;
   canvas.height = INPUT_H;
@@ -114,7 +123,6 @@ function buildFaceOpaqueTensor(
   ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
 
   const { data } = ctx.getImageData(0, 0, INPUT_W, INPUT_H);
-
   const floats = new Float32Array(1 * 3 * INPUT_H * INPUT_W);
   const plane = INPUT_H * INPUT_W;
   for (let i = 0; i < plane; i++) {
@@ -129,38 +137,57 @@ function buildFaceOpaqueTensor(
   return new ort.Tensor('float32', floats, [1, 3, INPUT_H, INPUT_W]);
 }
 
-class OnnxOpaqueSession {
-  private session: InferenceSession | null = null;
-  private loadPromise: Promise<InferenceSession | null> | null = null;
+async function runLogitSession(
+  session: InferenceSession,
+  tensor: Tensor
+): Promise<number | null> {
+  const feeds: Record<string, Tensor> = {};
+  feeds[session.inputNames[0] ?? 'input'] = tensor;
+  const out = await session.run(feeds);
+  const data = out[session.outputNames[0] ?? 'logit']?.data;
+  if (!data || data.length === 0) return null;
+  const logit = Number(data[0]);
+  return Number.isFinite(logit) ? sigmoid(logit) : null;
+}
+
+class DualGlassesSession {
+  private eyeglasses: InferenceSession | null = null;
+  private sunglasses: InferenceSession | null = null;
+  private loadPromise: Promise<boolean> | null = null;
   private failed = false;
-  /** Same face score for L+R evaluates in one sample tick. */
-  private frameCache: { key: string; result: OnnxOpaqueScore } | null = null;
+  private frameCache: { key: string; result: DualGlassesScore } | null = null;
 
   constructor(
-    private readonly modelUrl: string,
+    private readonly eyeglassesUrl: string,
+    private readonly sunglassesUrl: string,
     private readonly wasmPaths: string
   ) {}
 
-  private async load(): Promise<InferenceSession | null> {
-    if (this.session) return this.session;
-    if (this.failed) return null;
-    if (typeof window === 'undefined') return null;
+  private async load(): Promise<boolean> {
+    if (this.eyeglasses && this.sunglasses) return true;
+    if (this.failed) return false;
+    if (typeof window === 'undefined') return false;
 
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
         try {
           const ort = await getOrt(this.wasmPaths);
-          if (!ort) return null;
-          const session = await ort.InferenceSession.create(this.modelUrl, {
-            executionProviders: ['wasm'],
-            graphOptimizationLevel: 'all',
-          });
-          this.session = session;
-          return session;
+          if (!ort) return false;
+          const opts = {
+            executionProviders: ['wasm'] as const,
+            graphOptimizationLevel: 'all' as const,
+          };
+          const [eye, sun] = await Promise.all([
+            ort.InferenceSession.create(this.eyeglassesUrl, opts),
+            ort.InferenceSession.create(this.sunglassesUrl, opts),
+          ]);
+          this.eyeglasses = eye;
+          this.sunglasses = sun;
+          return true;
         } catch (err) {
-          console.warn('[onnxOpaque] failed to load model', err);
+          console.warn('[onnxOpaque] failed to load dual models', err);
           this.failed = true;
-          return null;
+          return false;
         }
       })();
     }
@@ -170,116 +197,129 @@ class OnnxOpaqueSession {
   async score(
     input: EyeVisibilityEvaluateInput,
     threshold: number
-  ): Promise<OnnxOpaqueScore | null> {
+  ): Promise<DualGlassesScore | null> {
     if (!input.video || input.video.readyState < 2) return null;
 
-    // Cache by video clock + landmark tip so L/R share one face inference.
     const tip = input.landmarks[1];
-    const cacheKey = `${input.video.currentTime.toFixed(3)}:${tip?.x.toFixed(4)}:${tip?.y.toFixed(4)}`;
+    const cacheKey = `${input.video.currentTime.toFixed(3)}:${tip?.x.toFixed(4)}:${tip?.y.toFixed(4)}:${threshold}`;
     if (this.frameCache?.key === cacheKey) {
-      return {
-        score: this.frameCache.result.score,
-        opaque: this.frameCache.result.score >= threshold,
-      };
+      return this.frameCache.result;
     }
 
-    const session = await this.load();
-    if (!session) return null;
+    if (!(await this.load()) || !this.eyeglasses || !this.sunglasses) return null;
 
     try {
       const ort = await getOrt(this.wasmPaths);
       if (!ort) return null;
 
-      const tensor = buildFaceOpaqueTensor(ort, input.video, input.landmarks);
+      const tensor = buildFaceTensor(ort, input.video, input.landmarks);
       if (!tensor) return null;
 
-      const feeds: Record<string, Tensor> = {};
-      const inputName = session.inputNames[0] ?? 'input';
-      feeds[inputName] = tensor;
+      // Same crop tensor; run sequentially — ORT may not like concurrent use of one Tensor.
+      const eyeglassesProb = await runLogitSession(this.eyeglasses, tensor);
+      const sunglassesProb = await runLogitSession(this.sunglasses, tensor);
+      if (eyeglassesProb == null || sunglassesProb == null) return null;
 
-      const out = await session.run(feeds);
-      const outName = session.outputNames[0] ?? 'logit';
-      const logitData = out[outName]?.data;
-      if (!logitData || logitData.length === 0) return null;
-
-      const logit = Number(logitData[0]);
-      if (!Number.isFinite(logit)) return null;
-      const score = sigmoid(logit);
-      const result = { score, opaque: score >= threshold };
+      const partition = combineEyewearPartition(eyeglassesProb, sunglassesProb, threshold);
+      const result: DualGlassesScore = {
+        eyeglassesProb,
+        sunglassesProb,
+        partition,
+        opaque: partition === 'opaque',
+      };
       this.frameCache = { key: cacheKey, result };
       return result;
     } catch (err) {
-      console.warn('[onnxOpaque] inference failed', err);
+      console.warn('[onnxOpaque] dual inference failed', err);
       return null;
     }
   }
 }
 
+function emptyOnnxDebug(): EyeVisibilitySample['debug'] {
+  return {
+    irisInContour: false,
+    eyeWidthOk: false,
+    poseOk: false,
+    earOk: false,
+    geometryScore: 0,
+    usedSecondaryOcclusion: false,
+    onnxScore: null,
+    onnxOpaque: null,
+    eyeglassesProb: null,
+    sunglassesProb: null,
+    eyewearPartition: null,
+    agree: null,
+    onnxReady: false,
+  };
+}
+
+function applyOnnxDebug(
+  base: EyeVisibilitySample['debug'],
+  score: DualGlassesScore
+): EyeVisibilitySample['debug'] {
+  return {
+    ...base,
+    onnxScore: score.sunglassesProb,
+    onnxOpaque: score.opaque,
+    eyeglassesProb: score.eyeglassesProb,
+    sunglassesProb: score.sunglassesProb,
+    eyewearPartition: score.partition,
+    onnxReady: true,
+  };
+}
+
+function resolveUrls(options: OnnxOpaqueOptions) {
+  return {
+    eyeglasses: options.eyeglassesModelUrl ?? DEFAULT_EYEGLASSES_URL,
+    sunglasses:
+      options.sunglassesModelUrl ?? options.modelUrl ?? DEFAULT_SUNGLASSES_URL,
+    wasm: options.wasmPaths ?? DEFAULT_WASM_PATHS,
+    threshold: options.threshold ?? DEFAULT_THRESHOLD,
+  };
+}
+
 /**
- * Standalone ONNX backend (for A/B / debug). Prefer createCombinedOpaqueBackend in product.
+ * Standalone dual ONNX backend.
+ * opaque → NOT_VISIBLE; transparent / bare → VISIBLE.
  */
 export function createOnnxOpaqueBackend(options: OnnxOpaqueOptions = {}): EyeVisibilityBackend {
-  const threshold = options.threshold ?? DEFAULT_THRESHOLD;
-  const session = new OnnxOpaqueSession(
-    options.modelUrl ?? DEFAULT_MODEL_URL,
-    options.wasmPaths ?? DEFAULT_WASM_PATHS
-  );
+  const { eyeglasses, sunglasses, wasm, threshold } = resolveUrls(options);
+  const session = new DualGlassesSession(eyeglasses, sunglasses, wasm);
 
   return {
     async evaluate(input: EyeVisibilityEvaluateInput): Promise<EyeVisibilitySample> {
       const result = await session.score(input, threshold);
       if (!result) {
-        return {
-          state: 'UNKNOWN',
-          confidence: 0,
-          debug: {
-            irisInContour: false,
-            eyeWidthOk: false,
-            poseOk: false,
-            earOk: false,
-            geometryScore: 0,
-            usedSecondaryOcclusion: false,
-            onnxScore: null,
-            onnxOpaque: null,
-            agree: null,
-            onnxReady: false,
-          },
-        };
+        return { state: 'UNKNOWN', confidence: 0, debug: emptyOnnxDebug() };
       }
 
+      const state = result.opaque ? 'NOT_VISIBLE' : 'VISIBLE';
+      const confidence = result.opaque
+        ? result.sunglassesProb
+        : result.partition === 'transparent'
+          ? result.eyeglassesProb
+          : Math.max(1 - result.eyeglassesProb, 1 - result.sunglassesProb);
+
       return {
-        state: result.opaque ? 'NOT_VISIBLE' : 'VISIBLE',
-        confidence: result.opaque ? result.score : 1 - result.score,
-        debug: {
-          irisInContour: false,
-          eyeWidthOk: false,
-          poseOk: false,
-          earOk: false,
-          geometryScore: 0,
-          usedSecondaryOcclusion: false,
-          onnxScore: result.score,
-          onnxOpaque: result.opaque,
-          agree: null,
-          onnxReady: true,
-        },
+        state,
+        confidence: Math.min(1, confidence),
+        debug: applyOnnxDebug(emptyOnnxDebug(), result),
       };
     },
   };
 }
 
 /**
- * Wrap the landmark/heuristic backend: state always comes from `heuristic`;
- * ONNX only adjusts confidence and fills debug.{onnxScore,onnxOpaque,agree}.
+ * Heuristic stays primary for `state`. Dual ONNX fills partition debug and
+ * boosts confidence when they agree on opaque vs visible.
  */
 export function createCombinedOpaqueBackend(
   heuristic: EyeVisibilityBackend,
   options: OnnxOpaqueOptions = {}
 ): EyeVisibilityBackend {
-  const threshold = options.threshold ?? DEFAULT_THRESHOLD;
-  const session = new OnnxOpaqueSession(
-    options.modelUrl ?? DEFAULT_MODEL_URL,
-    options.wasmPaths ?? DEFAULT_WASM_PATHS
-  );
+  const { eyeglasses, sunglasses, wasm, threshold } = resolveUrls(options);
+  const session = new DualGlassesSession(eyeglasses, sunglasses, wasm);
 
   return {
     async evaluate(input: EyeVisibilityEvaluateInput): Promise<EyeVisibilitySample> {
@@ -293,13 +333,15 @@ export function createCombinedOpaqueBackend(
             ...primary.debug,
             onnxScore: null,
             onnxOpaque: null,
+            eyeglassesProb: null,
+            sunglassesProb: null,
+            eyewearPartition: null,
             agree: null,
             onnxReady: false,
           },
         };
       }
 
-      // Opaque intent from heuristic: NOT_VISIBLE, or secondary crop confirmed occlusion.
       const heuristicOpaque =
         primary.state === 'NOT_VISIBLE' || primary.debug.usedSecondaryOcclusion === true;
       const agree = heuristicOpaque === onnx.opaque;
@@ -310,17 +352,13 @@ export function createCombinedOpaqueBackend(
       } else if (agree && primary.state === 'VISIBLE') {
         confidence = Math.min(1, primary.confidence + VISIBLE_AGREE_BOOST);
       }
-      // Disagree: leave confidence alone — never flip state from ONNX.
 
       return {
         state: primary.state,
         confidence,
         debug: {
-          ...primary.debug,
-          onnxScore: onnx.score,
-          onnxOpaque: onnx.opaque,
+          ...applyOnnxDebug(primary.debug, onnx),
           agree,
-          onnxReady: true,
         },
       };
     },
