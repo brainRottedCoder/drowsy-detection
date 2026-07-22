@@ -376,10 +376,10 @@ export default function SettingsPage() {
               label="Microsleep duration"
               value={d.microsleepMs}
               min={800}
-              max={5000}
+              max={15000}
               step={100}
               unit="ms"
-              hint="Eyes closed this long forces a critical score."
+              hint="Eyes closed this long forces a critical score. Default 8000 ms."
               onChange={v => setDetection({ microsleepMs: Math.round(v) })}
             />
             <NumberRow

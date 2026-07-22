@@ -75,7 +75,7 @@ export interface CalibrationData {
 export const DEFAULT_DETECTION: DetectionSettings = {
   // Natural blinks are ~100–500ms; camera lag often stretches them past 400ms.
   blinkMaxMs: 550,
-  microsleepMs: 2000,
+  microsleepMs: 8000,
   perclosWindowMs: 60_000,
   blinkStatsWindowMs: 60_000,
   // Slightly higher closed ratio → more sensitive blink capture after calibration.
@@ -111,9 +111,9 @@ export const DEFAULT_SCORE_WEIGHTS: ScoreWeights = {
 };
 
 export const DEFAULT_ALERT_LEVELS: AlertLevelSettings = {
-  cautionEnter: 30,
-  warningEnter: 50,
-  criticalEnter: 75,
+  cautionEnter: 50,
+  warningEnter: 70,
+  criticalEnter: 85,
   downgradeHysteresis: 10,
   downgradeStableMs: 2500,
 };
@@ -173,8 +173,21 @@ export const getSettings = (): UserSettings => {
     if (detection.earClosedRatio <= 0.55) {
       detection.earClosedRatio = DEFAULT_DETECTION.earClosedRatio;
     }
-    if (detection.earOpenRatio <= 0.70) {
-      detection.earOpenRatio = DEFAULT_DETECTION.earOpenRatio;
+    // Migrate older microsleep default (2s) that caused frequent false CRITICAL.
+    if (detection.microsleepMs <= 2000) {
+      detection.microsleepMs = DEFAULT_DETECTION.microsleepMs;
+    }
+
+    const alertLevels = { ...DEFAULT_ALERT_LEVELS, ...(parsed.alertLevels ?? {}) };
+    // Migrate older caution threshold (30%) so CAUTION starts at 50%.
+    if ((parsed.alertLevels?.cautionEnter ?? 30) <= 30) {
+      alertLevels.cautionEnter = DEFAULT_ALERT_LEVELS.cautionEnter;
+      if ((parsed.alertLevels?.warningEnter ?? 50) <= 50) {
+        alertLevels.warningEnter = DEFAULT_ALERT_LEVELS.warningEnter;
+      }
+      if ((parsed.alertLevels?.criticalEnter ?? 75) <= 75) {
+        alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
+      }
     }
 
     const settings: UserSettings = {
@@ -182,7 +195,7 @@ export const getSettings = (): UserSettings => {
       ...parsed,
       detection,
       scoreWeights: { ...DEFAULT_SCORE_WEIGHTS, ...(parsed.scoreWeights ?? {}) },
-      alertLevels: { ...DEFAULT_ALERT_LEVELS, ...(parsed.alertLevels ?? {}) },
+      alertLevels,
     };
 
     if (
@@ -190,7 +203,11 @@ export const getSettings = (): UserSettings => {
       parsed.detection?.yawnFramesThreshold !== detection.yawnFramesThreshold ||
       parsed.detection?.blinkMaxMs !== detection.blinkMaxMs ||
       parsed.detection?.earClosedRatio !== detection.earClosedRatio ||
-      parsed.detection?.earOpenRatio !== detection.earOpenRatio
+      parsed.detection?.earOpenRatio !== detection.earOpenRatio ||
+      parsed.detection?.microsleepMs !== detection.microsleepMs ||
+      parsed.alertLevels?.cautionEnter !== alertLevels.cautionEnter ||
+      parsed.alertLevels?.warningEnter !== alertLevels.warningEnter ||
+      parsed.alertLevels?.criticalEnter !== alertLevels.criticalEnter
     ) {
       localStorage.setItem(KEYS.SETTINGS, JSON.stringify(settings));
     }

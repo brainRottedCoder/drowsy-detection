@@ -56,7 +56,7 @@ function buildDetectionList(d: DetectionFlags): string[] {
   if (d.facePresence === 'FACE_LOST') items.push('Face tracking unstable');
   if (d.facePresence === 'ABSENT') items.push('Driver not in frame');
   // Blink rate is display-only (footer / stats) — do not treat high/low as a warning reason.
-  if (d.score >= 30 && items.length === 0) {
+  if (d.score >= 50 && items.length === 0) {
     items.push(`Elevated drowsiness score (${Math.round(d.score)}%)`);
   }
   if (items.length === 0) items.push(`Monitoring — score ${Math.round(d.score)}%`);
