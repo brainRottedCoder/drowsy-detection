@@ -174,9 +174,7 @@ export const getSettings = (): UserSettings => {
     }
     // Migrate prior microsleep defaults (2s / 2.5s / 5s / 8s) to current 4s.
     if (
-      detection.microsleepMs <= 2500 ||
-      detection.microsleepMs === 5000 ||
-      detection.microsleepMs === 8000
+      detection.microsleepMs <= 5000 
     ) {
       detection.microsleepMs = DEFAULT_DETECTION.microsleepMs;
     }
