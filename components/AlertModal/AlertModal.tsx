@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Button } from '../ui/Button';
 import type { AlertLevel } from '../../hooks/useDrowsiness';
 import { useAppContext } from '../../context/AppContext';
@@ -7,6 +7,7 @@ export interface DetectionFlags {
   isMicrosleep: boolean;
   isYawning: boolean;
   isYawnAlert: boolean;
+  yawnsPerMinute: number;
   isDistracted: boolean;
   eyesNotClearlyVisible: boolean;
   facePresence: 'PRESENT' | 'FACE_LOST' | 'ABSENT';
@@ -18,71 +19,196 @@ export interface DetectionFlags {
 interface AlertModalProps {
   alertLevel: AlertLevel;
   detections: DetectionFlags;
+  isCalibrating?: boolean;
   onAcknowledge: () => void;
 }
 
-type DisplayLevel = Exclude<AlertLevel, 'NONE'> | 'INFO';
+type AlertKind = 'person_absent' | 'eyes_not_found' | 'yawn_rate' | 'drowsiness';
 
-const LEVEL_STYLES: Record<DisplayLevel, { border: string; badge: string; title: string }> = {
+interface AlertStyle {
+  border: string;
+  badge: string;
+  titleColor: string;
+  pulse?: boolean;
+}
+
+interface ActiveAlert {
+  kind: AlertKind;
+  title: string;
+  message: string;
+  style: AlertStyle;
+  showAcknowledge?: boolean;
+}
+
+const ALERT_STYLES: Record<Exclude<AlertKind, 'drowsiness'>, AlertStyle> = {
+  person_absent: {
+    border: 'border-violet-500',
+    badge: 'bg-violet-500',
+    titleColor: 'text-violet-300',
+  },
+  eyes_not_found: {
+    border: 'border-cyan-400',
+    badge: 'bg-cyan-500',
+    titleColor: 'text-cyan-300',
+  },
+  yawn_rate: {
+    border: 'border-orange-400',
+    badge: 'bg-orange-500',
+    titleColor: 'text-orange-300',
+  },
+};
+
+const DROWSINESS_STYLES: Record<Exclude<AlertLevel, 'NONE'>, AlertStyle> = {
   CAUTION: {
     border: 'border-yellow-400',
     badge: 'bg-yellow-500',
-    title: 'Caution',
+    titleColor: 'text-yellow-300',
   },
   WARNING: {
     border: 'border-amber-400',
     badge: 'bg-amber-500',
-    title: 'Warning',
+    titleColor: 'text-amber-300',
   },
   CRITICAL: {
     border: 'border-red-500',
     badge: 'bg-red-600 animate-pulse',
-    title: 'Critical',
-  },
-  INFO: {
-    border: 'border-indigo-400',
-    badge: 'bg-indigo-500',
-    title: 'Attention',
+    titleColor: 'text-red-300',
+    pulse: true,
   },
 };
 
-function buildDetectionList(d: DetectionFlags): string[] {
-  const items: string[] = [];
-  if (d.isMicrosleep) items.push('Microsleep (eyes closed too long)');
-  if (d.isYawnAlert) items.push('Frequent yawning detected — consider taking a break');
-  else if (d.isYawning) items.push('Yawning');
-  if (d.isDistracted) items.push('Looking away / distracted');
-  if (d.eyesNotClearlyVisible) items.push('Eyes not clearly visible');
-  if (d.facePresence === 'FACE_LOST') items.push('Face tracking unstable');
-  if (d.facePresence === 'ABSENT') items.push('Driver not in frame');
-  // Blink rate is display-only (footer / stats) — do not treat high/low as a warning reason.
-  if (d.score >= 50 && items.length === 0) {
-    items.push(`Elevated drowsiness score (${Math.round(d.score)}%)`);
+function buildActiveAlerts(
+  alertLevel: AlertLevel,
+  d: DetectionFlags,
+  yawnThresholdPerMin: number
+): ActiveAlert[] {
+  const alerts: ActiveAlert[] = [];
+
+  if (d.facePresence === 'ABSENT') {
+    alerts.push({
+      kind: 'person_absent',
+      title: 'Person not in frame',
+      message: 'Your face has left the camera view. Look back at the camera to resume monitoring.',
+      style: ALERT_STYLES.person_absent,
+    });
   }
-  if (items.length === 0) items.push(`Monitoring — score ${Math.round(d.score)}%`);
-  return items;
+
+  if (d.eyesNotClearlyVisible && d.facePresence !== 'ABSENT') {
+    alerts.push({
+      kind: 'eyes_not_found',
+      title: 'Eyes not found',
+      message: 'Eyes are not clearly visible. Adjust position or remove coverings.',
+      style: ALERT_STYLES.eyes_not_found,
+    });
+  }
+
+  if (d.isYawnAlert) {
+    alerts.push({
+      kind: 'yawn_rate',
+      title: 'High yawn rate',
+      message: `${d.yawnsPerMinute.toFixed(1)} yawns/min exceeds threshold of ${yawnThresholdPerMin.toFixed(1)}/min — consider taking a break.`,
+      style: ALERT_STYLES.yawn_rate,
+    });
+  }
+
+  if (alertLevel !== 'NONE') {
+    const style = DROWSINESS_STYLES[alertLevel];
+    const levelLabel =
+      alertLevel === 'CRITICAL' ? 'Critical' : alertLevel === 'WARNING' ? 'Warning' : 'Caution';
+    const extras: string[] = [];
+    if (d.isMicrosleep) extras.push('microsleep detected');
+    if (d.isDistracted) extras.push('looking away');
+
+    alerts.push({
+      kind: 'drowsiness',
+      title: `Drowsiness — ${levelLabel}`,
+      message:
+        extras.length > 0
+          ? `Score ${Math.round(d.score)}%. Signs: ${extras.join(', ')}. Pull over safely when you can.`
+          : `Drowsiness score is ${Math.round(d.score)}%. Stay alert or take a break.`,
+      style,
+      showAcknowledge: alertLevel === 'CRITICAL',
+    });
+  }
+
+  return alerts;
 }
 
-function resolveDisplayLevel(alertLevel: AlertLevel, d: DetectionFlags): DisplayLevel | null {
-  if (alertLevel !== 'NONE') return alertLevel;
-  if (d.facePresence === 'ABSENT') return 'WARNING';
-  if (d.isYawnAlert) return 'CAUTION';
-  if (d.eyesNotClearlyVisible) return 'INFO';
-  return null;
+function AlertCard({
+  alert,
+  onAcknowledge,
+}: {
+  alert: ActiveAlert;
+  onAcknowledge: () => void;
+}) {
+  const { style, title, message, showAcknowledge } = alert;
+
+  return (
+    <div
+      className={`w-[min(100vw-2rem,22rem)] rounded-2xl border-2 bg-slate-950/95 text-white shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-4 fade-in duration-200 ${style.border}`}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <div
+            className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${style.badge}`}
+          >
+            <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <h2 className={`text-sm font-bold uppercase tracking-wide ${style.titleColor}`}>
+              {title}
+            </h2>
+            <p className="mt-1 text-xs text-slate-300">{message}</p>
+
+            {showAcknowledge && (
+              <Button
+                onClick={onAcknowledge}
+                variant="danger"
+                size="sm"
+                className="mt-3 w-full"
+              >
+                I AM AWAKE
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export const AlertModal: React.FC<AlertModalProps> = ({
   alertLevel,
   detections,
+  isCalibrating = false,
   onAcknowledge,
 }) => {
   const { settings } = useAppContext();
   const isCritical = alertLevel === 'CRITICAL';
-  const displayLevel = resolveDisplayLevel(alertLevel, detections);
-  const visible = displayLevel !== null;
+
+  const yawnThresholdPerMin = useMemo(() => {
+    const { yawnAlertCount, yawnAlertWindowMs } = settings.detection;
+    const windowMs = Math.max(10_000, yawnAlertWindowMs);
+    return (Math.max(2, Math.round(yawnAlertCount)) / windowMs) * 60_000;
+  }, [settings.detection]);
+
+  const activeAlerts = useMemo(
+    () => buildActiveAlerts(alertLevel, detections, yawnThresholdPerMin),
+    [alertLevel, detections, yawnThresholdPerMin]
+  );
 
   useEffect(() => {
-    if (!isCritical) return;
+    if (!isCritical || isCalibrating) return;
 
     const volume = Math.min(1, Math.max(0, settings.volume));
     const peak = 0.35 * volume;
@@ -111,77 +237,17 @@ export const AlertModal: React.FC<AlertModalProps> = ({
         /* already closed */
       }
     };
-  }, [isCritical, settings.volume]);
+  }, [isCritical, isCalibrating, settings.volume]);
 
-  if (!visible || !displayLevel) return null;
-
-  const style = LEVEL_STYLES[displayLevel];
-  const detectionsList = buildDetectionList(detections);
-
-  const subtitle =
-    detections.facePresence === 'ABSENT' && alertLevel === 'NONE'
-      ? 'Face has been out of frame — please look at the camera.'
-      : detections.isYawnAlert && alertLevel === 'NONE'
-        ? 'Multiple yawns in a short time — take a break if you can.'
-        : detections.eyesNotClearlyVisible && alertLevel === 'NONE'
-          ? 'Eyes not clearly visible — remove sunglasses or coverings.'
-          : isCritical
-            ? 'Pull over safely when you can.'
-            : 'Fatigue signals detected — stay alert.';
+  if (isCalibrating || activeAlerts.length === 0) return null;
 
   return (
-    <div
-      className={`fixed bottom-4 left-4 z-50 w-[min(100%-2rem,22rem)] rounded-2xl border-2 bg-slate-950/95 text-white shadow-2xl backdrop-blur-md animate-in slide-in-from-bottom-4 fade-in duration-200 ${style.border}`}
-      role="status"
-      aria-live="polite"
-    >
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${style.badge}`}>
-            <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-              />
-            </svg>
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold uppercase tracking-wide">{style.title}</h2>
-              <span className="text-xs font-mono opacity-70">{Math.round(detections.score)}%</span>
-            </div>
-            <p className="mt-1 text-xs text-slate-300">{subtitle}</p>
-
-            <ul className="mt-3 space-y-1.5">
-              {detectionsList.map(item => (
-                <li key={item} className="flex items-start gap-2 text-sm text-slate-100">
-                  <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${style.badge}`} />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-
-            <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-slate-400">
-              <span>EAR {detections.ear.toFixed(3)}</span>
-              <span>Blinks {Math.round(detections.blinkRate)}/min</span>
-            </div>
-
-            {isCritical && (
-              <Button
-                onClick={onAcknowledge}
-                variant="danger"
-                size="sm"
-                className="mt-3 w-full"
-              >
-                I AM AWAKE
-              </Button>
-            )}
-          </div>
+    <div className="fixed bottom-4 left-4 z-50 flex flex-col-reverse gap-2 pointer-events-none">
+      {activeAlerts.map(alert => (
+        <div key={alert.kind} className="pointer-events-auto">
+          <AlertCard alert={alert} onAcknowledge={onAcknowledge} />
         </div>
-      </div>
+      ))}
     </div>
   );
 };

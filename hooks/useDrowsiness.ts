@@ -31,6 +31,7 @@ interface UseDrowsinessReturn {
   currentMAR: number;
   isYawning: boolean;
   yawnCount: number;
+  yawnsPerMinute: number;
   isYawnAlert: boolean;
   isMicrosleep: boolean;
   isDistracted: boolean;
@@ -45,12 +46,18 @@ interface UseDrowsinessReturn {
 }
 
 /** Blendshape enter/exit for eyeBlinkLeft/Right (MediaPipe 0–1). */
-const BLINK_ENTER = 0.40;
-const BLINK_EXIT = 0.25;
+const BLINK_ENTER = 0.38;
+const BLINK_EXIT = 0.22;
 /** Ignore only true zero-duration glitches; single-frame blendshape blinks are valid. */
 const MIN_BLINK_MS = 0;
 /** Cap single-blink contribution so long closures don't count as blinks. */
 const DEFAULT_BLINK_MAX_MS = 550;
+/** PERCLOS score window — responsive, but not so short that brief dips spike the meter. */
+const PERCLOS_SCORE_WINDOW_MS = 20_000;
+/** Ignore normal blink length before the closed-eye ramp starts. */
+const CLOSURE_RAMP_GRACE_MS = 600;
+/** After grace, duration that maps to ~100% on the closure ramp. */
+const CLOSURE_RAMP_MS = 3800;
 
 export const useDrowsiness = (
   landmarks: any[],
@@ -68,6 +75,7 @@ export const useDrowsiness = (
   const [currentMAR, setCurrentMAR] = useState(0);
   const [isYawning, setIsYawning] = useState(false);
   const [yawnCount, setYawnCount] = useState(0);
+  const [yawnsPerMinute, setYawnsPerMinute] = useState(0);
   const [isYawnAlert, setIsYawnAlert] = useState(false);
   const [isMicrosleep, setIsMicrosleep] = useState(false);
   const [isDistracted, setIsDistracted] = useState(false);
@@ -217,9 +225,10 @@ export const useDrowsiness = (
     setIsYawning(yawnRegisteredRef.current);
     yawnTimestampsRef.current = yawnTimestampsRef.current.filter(t => now - t < yawnMemoryMs);
 
-    const recentYawnAlertCount = yawnTimestampsRef.current.filter(
-      t => now - t < yawnAlertWindowMs
-    ).length;
+    const recentYawns = yawnTimestampsRef.current.filter(t => now - t < yawnAlertWindowMs);
+    const recentYawnAlertCount = recentYawns.length;
+    const ypm = (recentYawnAlertCount / yawnAlertWindowMs) * 60_000;
+    setYawnsPerMinute(ypm);
     setIsYawnAlert(recentYawnAlertCount >= yawnAlertCount);
 
     closureIntervalsRef.current = closureIntervalsRef.current.filter(
@@ -253,66 +262,65 @@ export const useDrowsiness = (
     levels,
   ]);
 
+  const earCloseOpenThresholds = () => {
+    const closeAt = Math.max(
+      calibration.threshold || 0.18,
+      (calibration.baselineEAR || 0.3) * 0.7
+    );
+    const openAt = closeAt + 0.04;
+    return { closeAt, openAt };
+  };
+
+  /**
+   * Eye closed?
+   * - loose (OR): blink counting — catch asymmetric / laggy blinks
+   * - strict: drowsiness / microsleep — need stronger evidence than a single noisy signal
+   */
+  const isEyeClosed = (
+    ear: number,
+    blink: number | undefined,
+    latched: boolean,
+    closeAt: number,
+    openAt: number,
+    mode: 'loose' | 'strict'
+  ): boolean => {
+    const byEar = latched ? ear <= openAt : ear < closeAt;
+    if (typeof blink !== 'number') return byEar;
+    const byBlink = latched ? blink > BLINK_EXIT : blink >= BLINK_ENTER;
+    if (mode === 'loose') return byBlink || byEar;
+    // Strict: strong blink alone, or EAR-closed with at least a mild blink signal.
+    if (latched) {
+      return blink > BLINK_EXIT && (byEar || blink > 0.45);
+    }
+    return blink >= BLINK_ENTER || (byEar && blink >= 0.28);
+  };
+
   /** Either eye closed — used for blink counting (asymmetric OK). */
   const resolveEitherEyeClosed = (
     leftEAR: number,
     rightEAR: number,
     shapes: Record<string, number>
   ): boolean => {
-    const leftBlink = shapes.eyeBlinkLeft;
-    const rightBlink = shapes.eyeBlinkRight;
-    const hasBlendshapes =
-      typeof leftBlink === 'number' || typeof rightBlink === 'number';
-
-    if (hasBlendshapes) {
-      const blinkScore = Math.max(leftBlink ?? 0, rightBlink ?? 0);
-      if (!eyesClosedLatchedRef.current) {
-        return blinkScore >= BLINK_ENTER;
-      }
-      return blinkScore > BLINK_EXIT;
-    }
-
-    const closeAt = Math.max(
-      calibration.threshold || 0.18,
-      (calibration.baselineEAR || 0.3) * 0.7
+    const { closeAt, openAt } = earCloseOpenThresholds();
+    const latched = eyesClosedLatchedRef.current;
+    return (
+      isEyeClosed(leftEAR, shapes.eyeBlinkLeft, latched, closeAt, openAt, 'loose') ||
+      isEyeClosed(rightEAR, shapes.eyeBlinkRight, latched, closeAt, openAt, 'loose')
     );
-    const openAt = closeAt + 0.04;
-    const avgEAR = (leftEAR + rightEAR) / 2;
-
-    if (!eyesClosedLatchedRef.current) {
-      return avgEAR < closeAt;
-    }
-    return avgEAR <= openAt;
   };
 
-  /** Both eyes closed — required for microsleep (avoids one-eye false positives). */
+  /** Both eyes closed — required for microsleep / drowsiness ramp. */
   const resolveBothEyesClosed = (
     leftEAR: number,
     rightEAR: number,
     shapes: Record<string, number>
   ): boolean => {
-    const leftBlink = shapes.eyeBlinkLeft;
-    const rightBlink = shapes.eyeBlinkRight;
-    const hasBothBlendshapes =
-      typeof leftBlink === 'number' && typeof rightBlink === 'number';
-
-    if (hasBothBlendshapes) {
-      if (!bothEyesClosedLatchedRef.current) {
-        return leftBlink >= BLINK_ENTER && rightBlink >= BLINK_ENTER;
-      }
-      return leftBlink > BLINK_EXIT && rightBlink > BLINK_EXIT;
-    }
-
-    const closeAt = Math.max(
-      calibration.threshold || 0.18,
-      (calibration.baselineEAR || 0.3) * 0.7
+    const { closeAt, openAt } = earCloseOpenThresholds();
+    const latched = bothEyesClosedLatchedRef.current;
+    return (
+      isEyeClosed(leftEAR, shapes.eyeBlinkLeft, latched, closeAt, openAt, 'strict') &&
+      isEyeClosed(rightEAR, shapes.eyeBlinkRight, latched, closeAt, openAt, 'strict')
     );
-    const openAt = closeAt + 0.04;
-
-    if (!bothEyesClosedLatchedRef.current) {
-      return leftEAR < closeAt && rightEAR < closeAt;
-    }
-    return leftEAR <= openAt && rightEAR <= openAt;
   };
 
   const trackBothEyesClosed = (bothClosed: boolean, now: number) => {
@@ -417,20 +425,29 @@ export const useDrowsiness = (
     pitch: number,
     windows: { perclosWindowMs: number; blinkStatsWindowMs: number; yawnMemoryMs: number }
   ) => {
-    const closedMs = closureIntervalsRef.current.reduce((sum, iv) => {
-      if (iv.type === 'blink') return sum;
-      const end = iv.end === iv.start ? now : iv.end;
+    const intervals = closureIntervalsRef.current;
+    const activeIdx = closedSinceRef.current !== null ? intervals.length - 1 : -1;
+
+    // Count droops/microsleeps + the *active* closure (even while still typed as blink).
+    // Completed short blinks stay excluded so normal blinking doesn't inflate PERCLOS.
+    const closedMs = intervals.reduce((sum, iv, idx) => {
+      const isActive = idx === activeIdx;
+      if (iv.type === 'blink' && !isActive) return sum;
+      const end = isActive ? now : iv.end === iv.start ? now : iv.end;
       return sum + Math.max(0, end - iv.start);
     }, 0);
-    const windowMs = Math.min(windows.perclosWindowMs, now - monitoringStartRef.current);
-    const perclos = Math.min(1, closedMs / Math.max(windowMs, 1000));
+
+    const scoreWindowMs = Math.min(PERCLOS_SCORE_WINDOW_MS, windows.perclosWindowMs);
+    const windowMs = Math.min(scoreWindowMs, Math.max(1000, now - monitoringStartRef.current));
+    const perclos = Math.min(1, closedMs / windowMs);
 
     // Blink rate = raw count of blinks in the last 1 minute (rolling window).
     // Display-only — must not drive drowsiness score / alert level.
     refreshBlinkRate(now);
 
     const baselineEAR = calibration.baselineEAR || 0.3;
-    const rawEarScore = clamp01((baselineEAR - avgEAR) / Math.max(baselineEAR, 0.05));
+    // Middle ground: closed eyes raise EAR score, but partial squints don't slam it to 1.
+    const rawEarScore = clamp01((baselineEAR - avgEAR) / Math.max(baselineEAR * 0.8, 0.05));
     const historyLen = Math.max(2, Math.round(d.earScoreHistory));
     earScoreHistoryRef.current.push(rawEarScore);
     if (earScoreHistoryRef.current.length > historyLen) {
@@ -452,6 +469,13 @@ export const useDrowsiness = (
     const pitchDev = Math.abs(pitch - (calibration.baselinePitch || 0));
     const headPoseScore = clamp01((yawDev + pitchDev) / headPoseRange);
 
+    // Sustained both-eyes-closed ramp (after blink grace):
+    // ~50% ≈ 2.5s total, ~77% ≈ 3.5s total, ~100% ≈ 4.4s total.
+    const closedForMs =
+      bothEyesClosedSinceRef.current !== null ? now - bothEyesClosedSinceRef.current : 0;
+    const rampMs = Math.max(0, closedForMs - CLOSURE_RAMP_GRACE_MS);
+    const closureScore = rampMs > 0 ? clamp01(rampMs / CLOSURE_RAMP_MS) : 0;
+
     let score =
       (perclos * clamp01(w.perclos) +
         earScore * clamp01(w.ear) +
@@ -460,6 +484,11 @@ export const useDrowsiness = (
       100;
 
     score = score * (0.5 + settings.sensitivity);
+
+    // Closed-eye ramp lifts toward alerts without the old instant ear*90 false positives.
+    if (closureScore > 0) {
+      score = Math.max(score, closureScore * 90);
+    }
 
     if (activeMicrosleep) {
       score = 100;
@@ -574,6 +603,7 @@ export const useDrowsiness = (
     mouthOpenFramesRef.current = 0;
     yawnRegisteredRef.current = false;
     yawnTimestampsRef.current = [];
+    setYawnsPerMinute(0);
     earScoreHistoryRef.current = [];
     lastPitchRef.current = null;
     setBlinkRate(0);
@@ -592,6 +622,7 @@ export const useDrowsiness = (
     currentMAR,
     isYawning,
     yawnCount,
+    yawnsPerMinute,
     isYawnAlert,
     isMicrosleep,
     isDistracted,

@@ -26,7 +26,14 @@ export interface DetectionSnapshot {
   landmarkCount: number;
 }
 
-type LogSeverity = 'info' | 'caution' | 'warning' | 'critical';
+type LogSeverity =
+  | 'info'
+  | 'person_absent'
+  | 'eyes_not_found'
+  | 'yawn_rate'
+  | 'drowsiness_caution'
+  | 'drowsiness_warning'
+  | 'drowsiness_critical';
 
 interface ActivityLogEntry {
   id: string;
@@ -43,9 +50,12 @@ const MAX_LOGS = 80;
 
 const SEVERITY_STYLES: Record<LogSeverity, string> = {
   info: 'bg-slate-500',
-  caution: 'bg-yellow-500',
-  warning: 'bg-amber-500',
-  critical: 'bg-red-500',
+  person_absent: 'bg-violet-500',
+  eyes_not_found: 'bg-cyan-500',
+  yawn_rate: 'bg-orange-500',
+  drowsiness_caution: 'bg-yellow-500',
+  drowsiness_warning: 'bg-amber-500',
+  drowsiness_critical: 'bg-red-500',
 };
 
 function formatTime(date: Date) {
@@ -157,51 +167,51 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
       if (current.facePresence === 'PRESENT') {
         pushLog('Face detected in frame', 'info');
       } else if (current.facePresence === 'FACE_LOST') {
-        pushLog('Face tracking interrupted', 'caution');
+        pushLog('Face tracking interrupted', 'info');
       } else {
-        pushLog('Driver not visible — monitoring paused', 'warning');
+        pushLog('Person not in frame — monitoring paused', 'person_absent');
       }
     }
 
     if (previous.alertLevel !== current.alertLevel) {
       const level = current.alertLevel;
       if (level === 'CRITICAL') {
-        pushLog(`Alert escalated to CRITICAL (score ${Math.round(current.drowsinessScore)})`, 'critical');
+        pushLog(`Drowsiness alert — CRITICAL (score ${Math.round(current.drowsinessScore)})`, 'drowsiness_critical');
       } else if (level === 'WARNING') {
-        pushLog(`Alert escalated to WARNING (score ${Math.round(current.drowsinessScore)})`, 'warning');
+        pushLog(`Drowsiness alert — WARNING (score ${Math.round(current.drowsinessScore)})`, 'drowsiness_warning');
       } else if (level === 'CAUTION') {
-        pushLog(`Alert raised to CAUTION (score ${Math.round(current.drowsinessScore)})`, 'caution');
+        pushLog(`Drowsiness alert — CAUTION (score ${Math.round(current.drowsinessScore)})`, 'drowsiness_caution');
       } else if (previous.alertLevel !== 'NONE') {
-        pushLog('Alert cleared — driver alert', 'info');
+        pushLog('Drowsiness alert cleared', 'info');
       }
     }
 
     if (!previous.isMicrosleep && current.isMicrosleep) {
-      pushLog('Microsleep detected (prolonged eye closure)', 'critical');
+      pushLog('Microsleep detected (prolonged eye closure)', 'drowsiness_critical');
     }
 
     if (!previous.isYawning && current.isYawning) {
-      pushLog(`Yawn detected (total: ${current.yawnCount})`, 'caution');
+      pushLog(`Yawn detected (total: ${current.yawnCount})`, 'yawn_rate');
     } else if (previous.yawnCount < current.yawnCount) {
-      pushLog(`Yawn count updated (${current.yawnCount})`, 'caution');
+      pushLog(`Yawn count updated (${current.yawnCount})`, 'yawn_rate');
     }
 
     if (!previous.isYawnAlert && current.isYawnAlert) {
-      pushLog('Frequent yawning alert — multiple yawns in 60s', 'warning');
+      pushLog('Yawns per minute exceeded threshold', 'yawn_rate');
     } else if (previous.isYawnAlert && !current.isYawnAlert) {
-      pushLog('Frequent yawning alert cleared', 'info');
+      pushLog('Yawn rate back within threshold', 'info');
     }
 
     if (!previous.isDistracted && current.isDistracted) {
-      pushLog('Distraction detected — looking away', 'warning');
+      pushLog('Distraction detected — looking away', 'drowsiness_warning');
     } else if (previous.isDistracted && !current.isDistracted) {
       pushLog('Gaze returned to forward view', 'info');
     }
 
     if (!previous.eyesNotClearlyVisible && current.eyesNotClearlyVisible) {
-      pushLog('Eyes not clearly visible — remove sunglasses or coverings', 'info');
+      pushLog('Eyes not found — not clearly visible in frame', 'eyes_not_found');
     } else if (previous.eyesNotClearlyVisible && !current.eyesNotClearlyVisible) {
-      pushLog('Eyes clearly visible again', 'info');
+      pushLog('Eyes found — clearly visible again', 'info');
     }
   }, [eventKey]);
 

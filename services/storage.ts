@@ -75,7 +75,7 @@ export interface CalibrationData {
 export const DEFAULT_DETECTION: DetectionSettings = {
   // Natural blinks are ~100–500ms; camera lag often stretches them past 400ms.
   blinkMaxMs: 550,
-  microsleepMs: 8000,
+  microsleepMs: 5000,
   perclosWindowMs: 60_000,
   blinkStatsWindowMs: 60_000,
   // Slightly higher closed ratio → more sensitive blink capture after calibration.
@@ -88,9 +88,8 @@ export const DEFAULT_DETECTION: DetectionSettings = {
   pitchGateDelta: 0.14,
   lookAwayDistractionMs: 4000,
   headPoseScoreRange: 0.35,
-  // Lower MAR / fewer frames = more sensitive yawn detection.
-  // Closed ~0.0–0.1, talking ~0.3–0.45, yawning typically ≥ 0.45.
-  yawnMarThreshold: 0.45,
+  // Closed ~0.0–0.1, talking ~0.3–0.45, yawning typically ≥ 0.55.
+  yawnMarThreshold: 0.55,
   yawnFramesThreshold: 10,
   yawnMemoryMs: 10 * 60_000,
   yawnAlertWindowMs: 60_000,
@@ -103,10 +102,10 @@ export const DEFAULT_DETECTION: DetectionSettings = {
 };
 
 export const DEFAULT_SCORE_WEIGHTS: ScoreWeights = {
-  perclos: 0.47,
-  ear: 0.23,
+  perclos: 0.43,
+  ear: 0.28,
   blinkRate: 0, // display-only; does not contribute to drowsiness score / alerts
-  yawn: 0.18,
+  yawn: 0.17,
   headPose: 0.12,
 };
 
@@ -159,8 +158,8 @@ export const getSettings = (): UserSettings => {
     const parsed = JSON.parse(stored) as Partial<UserSettings>;
     const detection = { ...DEFAULT_DETECTION, ...(parsed.detection ?? {}) };
 
-    // Migrate prior less-sensitive yawn defaults so existing installs pick up the change.
-    if (detection.yawnMarThreshold >= 0.6) {
+    // Migrate prior less-sensitive / older yawn MAR defaults.
+    if (detection.yawnMarThreshold >= 0.6 || detection.yawnMarThreshold <= 0.45) {
       detection.yawnMarThreshold = DEFAULT_DETECTION.yawnMarThreshold;
     }
     if (detection.yawnFramesThreshold >= 20) {
@@ -173,8 +172,12 @@ export const getSettings = (): UserSettings => {
     if (detection.earClosedRatio <= 0.55) {
       detection.earClosedRatio = DEFAULT_DETECTION.earClosedRatio;
     }
-    // Migrate older microsleep default (2s) that caused frequent false CRITICAL.
-    if (detection.microsleepMs <= 2000) {
+    // Migrate prior microsleep defaults (2s / 2.5s / 5s / 8s) to current 4s.
+    if (
+      detection.microsleepMs <= 2500 ||
+      detection.microsleepMs === 5000 ||
+      detection.microsleepMs === 8000
+    ) {
       detection.microsleepMs = DEFAULT_DETECTION.microsleepMs;
     }
 
@@ -188,6 +191,10 @@ export const getSettings = (): UserSettings => {
       if ((parsed.alertLevels?.criticalEnter ?? 75) <= 75) {
         alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
       }
+    }
+    // Migrate previous critical default (85%) to 77%.
+    if (parsed.alertLevels?.criticalEnter === 85) {
+      alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
     }
 
     const settings: UserSettings = {

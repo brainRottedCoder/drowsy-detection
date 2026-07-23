@@ -53,12 +53,12 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
       ? 'text-amber-300'
       : 'text-rose-400';
 
-  const sunglassesLabel = !sunglassesReady
+  const eyesInFrameLabel = !sunglassesReady
     ? 'Checking…'
     : sunglassesDetected
-      ? 'Detected'
-      : 'Not detected';
-  const sunglassesAccent = !sunglassesReady
+      ? 'Not visible'
+      : 'Visible';
+  const eyesInFrameAccent = !sunglassesReady
     ? 'text-amber-300'
     : sunglassesDetected
       ? 'text-rose-400'
@@ -110,10 +110,10 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
           }
         />
         <StatRow
-          label="Sunglasses detection"
-          value={sunglassesLabel}
-          valueClassName={sunglassesAccent}
-          hint={sunglassesDetected ? 'Remove sunglasses for clearer eye tracking' : undefined}
+          label="Eyes in the frame"
+          value={eyesInFrameLabel}
+          valueClassName={eyesInFrameAccent}
+          hint={sunglassesDetected ? 'Adjust position or remove coverings so eyes are visible' : undefined}
         />
       </div>
     </div>

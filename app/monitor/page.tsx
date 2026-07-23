@@ -24,6 +24,7 @@ export default function MonitorPage() {
     currentMAR,
     isYawning,
     yawnCount,
+    yawnsPerMinute,
     isYawnAlert,
     isMicrosleep,
     isDistracted,
@@ -156,7 +157,7 @@ export default function MonitorPage() {
               <div className="absolute inset-0 flex items-center justify-center bg-slate-900/85 backdrop-blur-sm">
                 <div className="text-white text-center p-4">
                   <div className="text-4xl mb-3">👤</div>
-                  <p className="text-lg font-semibold">Driver not visible</p>
+                  <p className="text-lg font-semibold">Person not in frame</p>
                   <p className="text-sm opacity-70">Monitoring paused until your face is back in frame</p>
                 </div>
               </div>
@@ -176,8 +177,8 @@ export default function MonitorPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
                 </svg>
                 <div className="leading-tight">
-                  <p className="text-xs font-semibold tracking-wide">Eyes not clearly visible</p>
-                  <p className="text-[10px] text-indigo-200/80">Remove sunglasses or coverings</p>
+                  <p className="text-xs font-semibold tracking-wide">Eyes not found</p>
+                  <p className="text-[10px] text-indigo-200/80">Adjust position or remove coverings</p>
                 </div>
               </div>
             )}
@@ -206,10 +207,12 @@ export default function MonitorPage() {
       {/* Non-blocking bottom-left warning — camera stays usable */}
       <AlertModal
         alertLevel={alertLevel}
+        isCalibrating={isCalibrating}
         detections={{
           isMicrosleep,
           isYawning,
           isYawnAlert,
+          yawnsPerMinute,
           isDistracted,
           eyesNotClearlyVisible,
           facePresence,
