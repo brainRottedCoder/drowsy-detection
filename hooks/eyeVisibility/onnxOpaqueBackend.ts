@@ -29,7 +29,6 @@ const DEFAULT_EYEGLASSES_URL = '/models/glasses_eyeglasses.onnx';
 const DEFAULT_SUNGLASSES_URL = '/models/glasses_sunglasses.onnx';
 const DEFAULT_THRESHOLD = 0.5;
 
-const OPAQUE_AGREE_BOOST = 0.18;
 const VISIBLE_AGREE_BOOST = 0.05;
 
 export interface OnnxOpaqueOptions {
@@ -311,8 +310,13 @@ export function createOnnxOpaqueBackend(options: OnnxOpaqueOptions = {}): EyeVis
 }
 
 /**
- * Heuristic stays primary for `state`. Dual ONNX fills partition debug and
- * boosts confidence when they agree on opaque vs visible.
+ * Heuristic + dual ONNX fusion.
+ *
+ * When ONNX is ready (face-level sunglasses/eyeglasses models):
+ *   - opaque (sunglasses) → NOT_VISIBLE — ONNX is authoritative
+ *   - transparent / bare  → VISIBLE unless heuristic confirms a real cover
+ *                           (hand / collapsed eye with secondary evidence)
+ * When ONNX is unavailable: fall back to landmark heuristic only.
  */
 export function createCombinedOpaqueBackend(
   heuristic: EyeVisibilityBackend,
@@ -342,19 +346,47 @@ export function createCombinedOpaqueBackend(
         };
       }
 
+      const heuristicCovered =
+        primary.state === 'NOT_VISIBLE' &&
+        (primary.debug.usedSecondaryOcclusion ||
+          (!primary.debug.irisInContour && !primary.debug.eyeWidthOk));
+
+      let state: EyeVisibilitySample['state'];
+      let confidence: number;
+
+      if (onnx.opaque) {
+        // Sunglasses / opaque lenses — ONNX wins.
+        state = 'NOT_VISIBLE';
+        confidence = Math.min(1, Math.max(0.7, onnx.sunglassesProb));
+      } else if (heuristicCovered) {
+        // Hand / hard occlusion while ONNX says not sunglasses.
+        state = 'NOT_VISIBLE';
+        confidence = Math.min(1, Math.max(primary.confidence, 0.65));
+      } else if (primary.state === 'NOT_VISIBLE' && !heuristicCovered) {
+        // Weak heuristic false positive (e.g. clear-glasses iris jitter) — trust ONNX.
+        state = 'VISIBLE';
+        confidence = Math.min(
+          1,
+          0.6 +
+            (onnx.partition === 'transparent'
+              ? onnx.eyeglassesProb
+              : 1 - onnx.sunglassesProb) *
+              0.3
+        );
+      } else if (primary.state === 'UNKNOWN') {
+        state = 'VISIBLE';
+        confidence = Math.min(1, 0.55 + (1 - onnx.sunglassesProb) * 0.35);
+      } else {
+        state = primary.state;
+        confidence = Math.min(1, primary.confidence + VISIBLE_AGREE_BOOST);
+      }
+
       const heuristicOpaque =
         primary.state === 'NOT_VISIBLE' || primary.debug.usedSecondaryOcclusion === true;
       const agree = heuristicOpaque === onnx.opaque;
 
-      let confidence = primary.confidence;
-      if (agree && heuristicOpaque) {
-        confidence = Math.min(1, primary.confidence + OPAQUE_AGREE_BOOST);
-      } else if (agree && primary.state === 'VISIBLE') {
-        confidence = Math.min(1, primary.confidence + VISIBLE_AGREE_BOOST);
-      }
-
       return {
-        state: primary.state,
+        state,
         confidence,
         debug: {
           ...applyOnnxDebug(primary.debug, onnx),

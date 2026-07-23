@@ -255,12 +255,12 @@ export default function SettingsPage() {
 
           {/* 5. Eye visibility */}
           <SectionCard
-            title="Eye visibility"
-            description="Warns when an eye is not clearly trackable (sunglasses, hand covering). Clear glasses and closed lids stay visible. Does not pause drowsiness scoring."
+            title="Eyes in the frame"
+            description="Warns when eyes are blocked (sunglasses, hand covering). Clear glasses and closed lids stay visible. Does not pause drowsiness scoring."
           >
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="font-medium text-slate-900">Enable eye visibility warning</p>
+                <p className="font-medium text-slate-900">Enable eyes-in-frame warning</p>
                 <p className="text-sm text-slate-500">
                   Shows a UI nudge when eyes are obscured.
                 </p>

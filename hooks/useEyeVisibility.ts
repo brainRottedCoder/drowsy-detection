@@ -40,8 +40,12 @@ function stateToScore(state: EyeVisibilityState): number {
   return 0;
 }
 
-function scoreToState(score: number, enter: number, exit: number, latched: boolean): EyeVisibilityState {
-  // High score → NOT_VISIBLE; mid → UNKNOWN; low → VISIBLE
+function scoreToState(
+  score: number,
+  enter: number,
+  exit: number,
+  latched: boolean
+): EyeVisibilityState {
   if (latched) {
     if (score < exit) return score > 0.35 ? 'UNKNOWN' : 'VISIBLE';
     return 'NOT_VISIBLE';
@@ -51,6 +55,11 @@ function scoreToState(score: number, enter: number, exit: number, latched: boole
   return 'VISIBLE';
 }
 
+/**
+ * Eyes-in-frame detector.
+ * Uses fused landmark + ONNX backend. ONNX opaque (sunglasses) → not in frame.
+ * Exposes one latched flag used by both Results Stats and alerts.
+ */
 export const useEyeVisibility = (
   videoRef: React.RefObject<HTMLVideoElement | null>,
   landmarks: any[]
@@ -71,15 +80,19 @@ export const useEyeVisibility = (
   const rightLatchedRef = useRef(false);
   const notVisibleSinceRef = useRef<number | null>(null);
   const clearSinceRef = useRef<number | null>(null);
+  const sampleIdRef = useRef(0);
 
   const [left, setLeft] = useState<EyeVisibilityState>('UNKNOWN');
   const [right, setRight] = useState<EyeVisibilityState>('UNKNOWN');
   const [overall, setOverall] = useState<EyeVisibilityState>('UNKNOWN');
   const [confidence, setConfidence] = useState(0);
   const [eyesNotClearlyVisible, setEyesNotClearlyVisible] = useState(false);
+  const [detectorReady, setDetectorReady] = useState(false);
   const [debug, setDebug] = useState<PerEyeVisibilityResult['debug']>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     const sample = () => {
       const det = detectionRef.current;
       if (!det.eyeVisibilityEnabled) {
@@ -88,6 +101,7 @@ export const useEyeVisibility = (
         setOverall('VISIBLE');
         setConfidence(1);
         setEyesNotClearlyVisible(false);
+        setDetectorReady(true);
         setDebug(null);
         leftLatchedRef.current = false;
         rightLatchedRef.current = false;
@@ -113,26 +127,38 @@ export const useEyeVisibility = (
         return;
       }
 
-      const leftSample = backendRef.current.evaluate({
+      const sampleId = ++sampleIdRef.current;
+      const inputBase = {
         video,
         landmarks: points,
-        side: 'left',
         yawGate,
         pitchGate,
         baselinePitch,
-      });
-      const rightSample = backendRef.current.evaluate({
-        video,
-        landmarks: points,
-        side: 'right',
-        yawGate,
-        pitchGate,
-        baselinePitch,
-      });
+      };
 
-      const apply = (L: Awaited<typeof leftSample>, R: Awaited<typeof rightSample>) => {
-        leftHistoryRef.current.push(stateToScore(L.state));
-        rightHistoryRef.current.push(stateToScore(R.state));
+      Promise.all([
+        Promise.resolve(
+          backendRef.current.evaluate({ ...inputBase, side: 'left' })
+        ),
+        Promise.resolve(
+          backendRef.current.evaluate({ ...inputBase, side: 'right' })
+        ),
+      ]).then(([L, R]) => {
+        if (cancelled || sampleId !== sampleIdRef.current) return;
+
+        const onnxReady = L.debug.onnxReady === true || R.debug.onnxReady === true;
+        // Ready once we have a fused sample. ONNX may still warm up; fusion falls back to heuristic.
+        setDetectorReady(true);
+
+        // Face-level ONNX is shared; if either eye reports opaque, treat both blocked.
+        const onnxOpaque =
+          onnxReady && (L.debug.onnxOpaque === true || R.debug.onnxOpaque === true);
+
+        const leftRaw = onnxOpaque ? 'NOT_VISIBLE' : L.state;
+        const rightRaw = onnxOpaque ? 'NOT_VISIBLE' : R.state;
+
+        leftHistoryRef.current.push(stateToScore(leftRaw));
+        rightHistoryRef.current.push(stateToScore(rightRaw));
         if (leftHistoryRef.current.length > SCORE_WINDOW) leftHistoryRef.current.shift();
         if (rightHistoryRef.current.length > SCORE_WINDOW) rightHistoryRef.current.shift();
 
@@ -175,16 +201,15 @@ export const useEyeVisibility = (
             setEyesNotClearlyVisible(false);
           }
         }
-      };
-
-      Promise.resolve(leftSample).then(L => {
-        Promise.resolve(rightSample).then(R => apply(L, R));
       });
     };
 
     const interval = setInterval(sample, SAMPLE_INTERVAL_MS);
     sample();
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [videoRef]);
 
   return {
@@ -193,6 +218,8 @@ export const useEyeVisibility = (
     overall,
     confidence,
     eyesNotClearlyVisible,
+    eyesInFrame: !eyesNotClearlyVisible,
+    detectorReady,
     debug,
   };
 };

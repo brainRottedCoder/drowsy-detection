@@ -3,9 +3,8 @@ import { createLandmarkBackend } from './landmarkBackend';
 import { createCombinedOpaqueBackend } from './onnxOpaqueBackend';
 
 /**
- * Landmark heuristic is primary for VISIBLE/NOT_VISIBLE.
- * Dual ONNX (eyeglasses + sunglasses) fills 3-way partition debug and
- * confidence boosts — does not override heuristic state until empirical OK.
+ * Landmark heuristic + dual ONNX (eyeglasses / sunglasses).
+ * ONNX opaque (sunglasses) drives NOT_VISIBLE; clear glasses stay VISIBLE.
  */
 export function createEyeVisibilityBackend(): EyeVisibilityBackend {
   const heuristic = createLandmarkBackend();

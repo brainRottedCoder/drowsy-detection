@@ -9,8 +9,10 @@ export interface ResultsStatsPanelProps {
   yawnCount: number;
   blinkRate: number;
   facePresence: FacePresenceState;
-  sunglassesDetected: boolean;
-  sunglassesReady?: boolean;
+  /** Latched: eyes blocked / not clearly visible (sunglasses, coverings). */
+  eyesNotInFrame: boolean;
+  /** False while the eyewear detector is still loading. */
+  eyesInFrameReady?: boolean;
 }
 
 function StatRow({
@@ -40,8 +42,8 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
   yawnCount,
   blinkRate,
   facePresence,
-  sunglassesDetected,
-  sunglassesReady = true,
+  eyesNotInFrame,
+  eyesInFrameReady = true,
 }) => {
   const inFrame = facePresence === 'PRESENT';
   const tracking = facePresence === 'FACE_LOST';
@@ -53,14 +55,14 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
       ? 'text-amber-300'
       : 'text-rose-400';
 
-  const eyesInFrameLabel = !sunglassesReady
+  const eyesLabel = !eyesInFrameReady
     ? 'Checking…'
-    : sunglassesDetected
+    : eyesNotInFrame
       ? 'Not visible'
       : 'Visible';
-  const eyesInFrameAccent = !sunglassesReady
+  const eyesAccent = !eyesInFrameReady
     ? 'text-amber-300'
-    : sunglassesDetected
+    : eyesNotInFrame
       ? 'text-rose-400'
       : 'text-emerald-400';
 
@@ -111,9 +113,13 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
         />
         <StatRow
           label="Eyes in the frame"
-          value={eyesInFrameLabel}
-          valueClassName={eyesInFrameAccent}
-          hint={sunglassesDetected ? 'Adjust position or remove coverings so eyes are visible' : undefined}
+          value={eyesLabel}
+          valueClassName={eyesAccent}
+          hint={
+            eyesNotInFrame
+              ? 'Adjust position or remove coverings so eyes are visible'
+              : undefined
+          }
         />
       </div>
     </div>

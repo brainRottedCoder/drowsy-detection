@@ -38,7 +38,7 @@ export default function MonitorPage() {
     left: leftEyeVisibility,
     right: rightEyeVisibility,
     eyesNotClearlyVisible,
-    debug: eyeVisibilityDebug,
+    detectorReady: eyesDetectorReady,
   } = useEyeVisibility(videoRef, landmarks);
 
   const { calibration } = useAppContext();
@@ -96,9 +96,6 @@ export default function MonitorPage() {
   const handleAcknowledgeAlert = () => {
     resetState();
   };
-
-  const onnxReady = eyeVisibilityDebug?.left?.onnxReady === true;
-  const onnxSaysOpaque = eyeVisibilityDebug?.left?.eyewearPartition === 'opaque';
 
   return (
     <div className="min-h-screen bg-slate-900 p-4 md:p-6 flex flex-col">
@@ -198,8 +195,8 @@ export default function MonitorPage() {
             yawnCount={yawnCount}
             blinkRate={blinkRate}
             facePresence={facePresence}
-            sunglassesDetected={onnxReady ? onnxSaysOpaque : eyesNotClearlyVisible}
-            sunglassesReady={onnxReady || facePresence === 'PRESENT'}
+            eyesNotInFrame={eyesNotClearlyVisible}
+            eyesInFrameReady={eyesDetectorReady || facePresence === 'PRESENT'}
           />
         </div>
       </div>

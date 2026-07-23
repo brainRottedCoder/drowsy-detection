@@ -63,7 +63,15 @@ export interface PerEyeVisibilityResult {
   right: EyeVisibilityState;
   overall: EyeVisibilityState;
   confidence: number;
+  /** Latched UI flag: eyes are blocked / not clearly in frame. */
   eyesNotClearlyVisible: boolean;
+  /**
+   * True when eyes are clearly trackable (inverse of eyesNotClearlyVisible once settled).
+   * Prefer this for "Eyes in the frame" stats.
+   */
+  eyesInFrame: boolean;
+  /** False while ONNX models are still loading (or disabled → treated ready). */
+  detectorReady: boolean;
   debug: {
     left: EyeVisibilityDebugFlags;
     right: EyeVisibilityDebugFlags;
