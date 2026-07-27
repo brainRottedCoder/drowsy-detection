@@ -14,6 +14,7 @@ export interface DetectionSnapshot {
   isYawning: boolean;
   yawnCount: number;
   isYawnAlert: boolean;
+  isScoreBurstAlert: boolean;
   isMicrosleep: boolean;
   isDistracted: boolean;
   facePresence: FacePresenceState;
@@ -31,6 +32,7 @@ type LogSeverity =
   | 'person_absent'
   | 'eyes_not_found'
   | 'yawn_rate'
+  | 'score_burst'
   | 'drowsiness_caution'
   | 'drowsiness_warning'
   | 'drowsiness_critical';
@@ -53,6 +55,7 @@ const SEVERITY_STYLES: Record<LogSeverity, string> = {
   person_absent: 'bg-violet-500',
   eyes_not_found: 'bg-cyan-500',
   yawn_rate: 'bg-orange-500',
+  score_burst: 'bg-orange-600',
   drowsiness_caution: 'bg-yellow-500',
   drowsiness_warning: 'bg-amber-500',
   drowsiness_critical: 'bg-red-500',
@@ -123,6 +126,7 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
     detection.isYawning,
     detection.yawnCount,
     detection.isYawnAlert,
+    detection.isScoreBurstAlert,
     detection.isMicrosleep,
     detection.isDistracted,
     detection.facePresence,
@@ -202,6 +206,15 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
       pushLog('Yawn rate back within threshold', 'info');
     }
 
+    if (!previous.isScoreBurstAlert && current.isScoreBurstAlert) {
+      pushLog(
+        `Drowsiness burst alert — score crossed threshold repeatedly (score ${Math.round(current.drowsinessScore)})`,
+        'score_burst'
+      );
+    } else if (previous.isScoreBurstAlert && !current.isScoreBurstAlert) {
+      pushLog('Drowsiness burst alert cleared', 'info');
+    }
+
     if (!previous.isDistracted && current.isDistracted) {
       pushLog('Distraction detected — looking away', 'drowsiness_warning');
     } else if (previous.isDistracted && !current.isDistracted) {
@@ -252,6 +265,11 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
           <FlagChip active={detection.isMicrosleep} label="Microsleep" tone="bg-red-600 text-white" />
           <FlagChip active={detection.isYawning} label="Yawning" tone="bg-amber-500 text-white" />
           <FlagChip active={detection.isYawnAlert} label="Yawn Alert" tone="bg-orange-600 text-white" />
+          <FlagChip
+            active={detection.isScoreBurstAlert}
+            label="Score Burst"
+            tone="bg-orange-600 text-white"
+          />
           <FlagChip active={detection.isDistracted} label="Distracted" tone="bg-orange-500 text-white" />
           <FlagChip
             active={detection.leftEyeVisibility === 'NOT_VISIBLE'}

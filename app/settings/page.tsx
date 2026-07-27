@@ -249,6 +249,40 @@ export default function SettingsPage() {
             />
           </SectionCard>
 
+          {/* 3b. Score burst alert */}
+          <SectionCard
+            title="Score burst alert"
+            description="Orange drowsiness alert when the score crosses a threshold repeatedly in a short window."
+          >
+            <SliderRow
+              label="Burst threshold"
+              value={d.scoreBurstThreshold}
+              min={30}
+              max={90}
+              step={1}
+              display={`${d.scoreBurstThreshold}%`}
+              hint="Count a crossing each time the score rises past this value."
+              onChange={v => setDetection({ scoreBurstThreshold: Math.round(v) })}
+            />
+            <NumberRow
+              label="Crossings to trigger"
+              value={d.scoreBurstCount}
+              min={2}
+              max={10}
+              hint="Alert when this many crossings occur inside the window below."
+              onChange={v => setDetection({ scoreBurstCount: Math.round(v) })}
+            />
+            <NumberRow
+              label="Burst window"
+              value={Math.round(d.scoreBurstWindowMs / 1000)}
+              min={5}
+              max={60}
+              unit="sec"
+              hint="Rolling window that counts score crossings (default 15s)."
+              onChange={v => setDetection({ scoreBurstWindowMs: Math.round(v) * 1000 })}
+            />
+          </SectionCard>
+
           {/* 4. Face absence */}
           <SectionCard
             title="Face absence"

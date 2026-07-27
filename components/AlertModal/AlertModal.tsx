@@ -7,6 +7,7 @@ export interface DetectionFlags {
   isMicrosleep: boolean;
   isYawning: boolean;
   isYawnAlert: boolean;
+  isScoreBurstAlert: boolean;
   yawnsPerMinute: number;
   isDistracted: boolean;
   eyesNotClearlyVisible: boolean;
@@ -23,7 +24,7 @@ interface AlertModalProps {
   onAcknowledge: () => void;
 }
 
-type AlertKind = 'person_absent' | 'eyes_not_found' | 'yawn_rate' | 'drowsiness';
+type AlertKind = 'person_absent' | 'eyes_not_found' | 'yawn_rate' | 'score_burst' | 'drowsiness';
 
 interface AlertStyle {
   border: string;
@@ -56,6 +57,12 @@ const ALERT_STYLES: Record<Exclude<AlertKind, 'drowsiness'>, AlertStyle> = {
     badge: 'bg-orange-500',
     titleColor: 'text-orange-300',
   },
+  score_burst: {
+    border: 'border-orange-500',
+    badge: 'bg-orange-600 animate-pulse',
+    titleColor: 'text-orange-300',
+    pulse: true,
+  },
 };
 
 const DROWSINESS_STYLES: Record<Exclude<AlertLevel, 'NONE'>, AlertStyle> = {
@@ -80,7 +87,10 @@ const DROWSINESS_STYLES: Record<Exclude<AlertLevel, 'NONE'>, AlertStyle> = {
 function buildActiveAlerts(
   alertLevel: AlertLevel,
   d: DetectionFlags,
-  yawnThresholdPerMin: number
+  yawnThresholdPerMin: number,
+  burstThreshold: number,
+  burstCount: number,
+  burstWindowSec: number
 ): ActiveAlert[] {
   const alerts: ActiveAlert[] = [];
 
@@ -108,6 +118,15 @@ function buildActiveAlerts(
       title: 'High yawn rate',
       message: `${d.yawnsPerMinute.toFixed(1)} yawns/min exceeds threshold of ${yawnThresholdPerMin.toFixed(1)}/min — consider taking a break.`,
       style: ALERT_STYLES.yawn_rate,
+    });
+  }
+
+  if (d.isScoreBurstAlert) {
+    alerts.push({
+      kind: 'score_burst',
+      title: 'Drowsiness alert',
+      message: `Score crossed ${burstThreshold}% ${burstCount} times within ${burstWindowSec}s. Pull over safely when you can.`,
+      style: ALERT_STYLES.score_burst,
     });
   }
 
@@ -202,9 +221,26 @@ export const AlertModal: React.FC<AlertModalProps> = ({
     return (Math.max(2, Math.round(yawnAlertCount)) / windowMs) * 60_000;
   }, [settings.detection]);
 
+  const burstConfig = useMemo(() => {
+    const { scoreBurstThreshold, scoreBurstCount, scoreBurstWindowMs } = settings.detection;
+    return {
+      threshold: Math.max(1, Math.round(scoreBurstThreshold ?? 60)),
+      count: Math.max(2, Math.round(scoreBurstCount ?? 4)),
+      windowSec: Math.round(Math.max(5_000, scoreBurstWindowMs ?? 15_000) / 1000),
+    };
+  }, [settings.detection]);
+
   const activeAlerts = useMemo(
-    () => buildActiveAlerts(alertLevel, detections, yawnThresholdPerMin),
-    [alertLevel, detections, yawnThresholdPerMin]
+    () =>
+      buildActiveAlerts(
+        alertLevel,
+        detections,
+        yawnThresholdPerMin,
+        burstConfig.threshold,
+        burstConfig.count,
+        burstConfig.windowSec
+      ),
+    [alertLevel, detections, yawnThresholdPerMin, burstConfig]
   );
 
   useEffect(() => {

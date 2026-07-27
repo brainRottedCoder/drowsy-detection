@@ -27,6 +27,10 @@ export interface DetectionSettings {
   yawnMemoryMs: number;
   yawnAlertWindowMs: number;
   yawnAlertCount: number;
+  // Burst drowsiness alert: N rising-edge crossings of score past threshold in a window
+  scoreBurstThreshold: number;
+  scoreBurstCount: number;
+  scoreBurstWindowMs: number;
   // Face absence
   faceLostGraceMs: number;
   faceAbsentAfterMs: number;
@@ -111,6 +115,10 @@ export const DEFAULT_DETECTION: DetectionSettings = {
   yawnMemoryMs: 10 * 60_000,
   yawnAlertWindowMs: 60_000,
   yawnAlertCount: 3,
+  // Orange burst alert when score crosses this % N times within the window.
+  scoreBurstThreshold: 60,
+  scoreBurstCount: 4,
+  scoreBurstWindowMs: 15_000,
   faceLostGraceMs: 1500,
   faceAbsentAfterMs: 12_000,
   eyeVisibilityEnabled: true,

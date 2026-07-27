@@ -47,6 +47,8 @@ interface UseDrowsinessReturn {
   yawnCount: number;
   yawnsPerMinute: number;
   isYawnAlert: boolean;
+  /** True when score crossed the burst threshold N times within the burst window. */
+  isScoreBurstAlert: boolean;
   isMicrosleep: boolean;
   isDistracted: boolean;
   facePresence: FacePresenceState;
@@ -92,6 +94,7 @@ export const useDrowsiness = (
   const [yawnCount, setYawnCount] = useState(0);
   const [yawnsPerMinute, setYawnsPerMinute] = useState(0);
   const [isYawnAlert, setIsYawnAlert] = useState(false);
+  const [isScoreBurstAlert, setIsScoreBurstAlert] = useState(false);
   const [isMicrosleep, setIsMicrosleep] = useState(false);
   const [isDistracted, setIsDistracted] = useState(false);
   const [blinkRate, setBlinkRate] = useState(0);
@@ -130,6 +133,8 @@ export const useDrowsiness = (
 
   const alertLevelRef = useRef<AlertLevel>('NONE');
   const belowLevelSinceRef = useRef<number | null>(null);
+  const scoreBurstTimestampsRef = useRef<number[]>([]);
+  const scoreWasAboveBurstRef = useRef(false);
 
   const blinkEnter = calibration.blendshapeBlinkEnter ?? DEFAULT_BLINK_ENTER;
   const blinkExit = calibration.blendshapeBlinkExit ?? DEFAULT_BLINK_EXIT;
@@ -667,6 +672,25 @@ export const useDrowsiness = (
     score = Math.min(100, Math.max(0, score));
     setDrowsinessScore(score);
     updateAlertLevel(score, now);
+    updateScoreBurstAlert(score, now);
+  };
+
+  /** Rising-edge crossings of the burst threshold; alert when N occur inside the window. */
+  const updateScoreBurstAlert = (score: number, now: number) => {
+    const threshold = clamp(d.scoreBurstThreshold ?? 60, 1, 100);
+    const countNeeded = Math.max(2, Math.round(d.scoreBurstCount ?? 4));
+    const windowMs = Math.max(5_000, d.scoreBurstWindowMs ?? 15_000);
+
+    const above = score >= threshold;
+    if (above && !scoreWasAboveBurstRef.current) {
+      scoreBurstTimestampsRef.current.push(now);
+    }
+    scoreWasAboveBurstRef.current = above;
+
+    scoreBurstTimestampsRef.current = scoreBurstTimestampsRef.current.filter(
+      t => now - t < windowMs
+    );
+    setIsScoreBurstAlert(scoreBurstTimestampsRef.current.length >= countNeeded);
   };
 
   const updateAlertLevel = (score: number, now: number) => {
@@ -762,12 +786,15 @@ export const useDrowsiness = (
     yawnRegisteredRef.current = false;
     yawnTimestampsRef.current = [];
     setYawnsPerMinute(0);
+    scoreBurstTimestampsRef.current = [];
+    scoreWasAboveBurstRef.current = false;
     earScoreHistoryRef.current = [];
     lastPitchRef.current = null;
     setBlinkRate(0);
     setAvgBlinkDurationMs(0);
     setIsYawning(false);
     setIsYawnAlert(false);
+    setIsScoreBurstAlert(false);
     setIsMicrosleep(false);
     setIsDistracted(false);
   };
@@ -782,6 +809,7 @@ export const useDrowsiness = (
     yawnCount,
     yawnsPerMinute,
     isYawnAlert,
+    isScoreBurstAlert,
     isMicrosleep,
     isDistracted,
     facePresence,
