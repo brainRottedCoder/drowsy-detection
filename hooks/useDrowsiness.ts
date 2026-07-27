@@ -73,7 +73,7 @@ const DEFAULT_BLINK_EXIT = 0.22;
 const MIN_BLINK_MS = 0;
 const DEFAULT_BLINK_MAX_MS = 550;
 /** Score PERCLOS over a short window so open eyes recover quickly. */
-const PERCLOS_SCORE_WINDOW_MS = 8_000;
+const PERCLOS_SCORE_WINDOW_MS = 5_000;
 const CLOSURE_RAMP_GRACE_MS = 450;
 const CLOSURE_RAMP_MS = 2500;
 
