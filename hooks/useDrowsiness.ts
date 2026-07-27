@@ -73,7 +73,7 @@ const DEFAULT_BLINK_EXIT = 0.22;
 const MIN_BLINK_MS = 0;
 const DEFAULT_BLINK_MAX_MS = 550;
 /** Score PERCLOS over a short window so open eyes recover quickly. */
-const PERCLOS_SCORE_WINDOW_MS = 5_000;
+const PERCLOS_SCORE_WINDOW_MS = 3_000;
 const CLOSURE_RAMP_GRACE_MS = 450;
 const CLOSURE_RAMP_MS = 2500;
 
@@ -322,7 +322,7 @@ export const useDrowsiness = (
       0.2,
       1.2
     );
-    const yawnMinDurationMs = Math.max(1500, Math.round(d.yawnMinDurationMs ?? 2500));
+    const yawnMinDurationMs = Math.max(1000, Math.round(d.yawnMinDurationMs ?? 1500));
     const yawnMemoryMs = Math.max(60_000, d.yawnMemoryMs);
     const yawnAlertWindowMs = Math.max(10_000, d.yawnAlertWindowMs);
     const yawnAlertCount = Math.max(2, Math.round(d.yawnAlertCount));
@@ -615,15 +615,21 @@ export const useDrowsiness = (
     const intervals = closureIntervalsRef.current;
     const activeIdx = closedSinceRef.current !== null ? intervals.length - 1 : -1;
 
+    // Score PERCLOS only over the live score window (e.g. last 3s), not the full
+    // retention list. Otherwise old droops inflate closedMs / short denominator.
+    const scoreWindowMs = Math.min(PERCLOS_SCORE_WINDOW_MS, windows.perclosWindowMs);
+    const windowMs = Math.min(scoreWindowMs, Math.max(1000, now - monitoringStartRef.current));
+    const windowStart = now - windowMs;
+
     const closedMs = intervals.reduce((sum, iv, idx) => {
       const isActive = idx === activeIdx;
       if (iv.type === 'blink' && !isActive) return sum;
       const end = isActive ? now : iv.end === iv.start ? now : iv.end;
-      return sum + Math.max(0, end - iv.start);
+      const overlapStart = Math.max(iv.start, windowStart);
+      const overlapEnd = Math.min(end, now);
+      return sum + Math.max(0, overlapEnd - overlapStart);
     }, 0);
 
-    const scoreWindowMs = Math.min(PERCLOS_SCORE_WINDOW_MS, windows.perclosWindowMs);
-    const windowMs = Math.min(scoreWindowMs, Math.max(1000, now - monitoringStartRef.current));
     const perclos = Math.min(1, closedMs / windowMs);
 
     refreshBlinkRate(now);

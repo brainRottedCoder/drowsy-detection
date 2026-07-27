@@ -23,7 +23,7 @@ export interface DetectionSettings {
   headPoseScoreRange: number;
   // Yawn detection + multi-yawn alert
   yawnMarThreshold: number;
-  /** Minimum continuous open-mouth duration (ms) before a yawn is counted. Natural yawns are ~2–3s. */
+  /** Minimum continuous open-mouth duration (ms) before a yawn is counted. Default 1.5s. */
   yawnMinDurationMs: number;
   /** @deprecated Prefer yawnMinDurationMs; kept for migrating older saved settings. */
   yawnFramesThreshold?: number;
@@ -116,8 +116,8 @@ export const DEFAULT_DETECTION: DetectionSettings = {
   headPoseScoreRange: 0.35,
   // Closed ~0.0–0.1, talking ~0.3–0.45, yawning typically ≥ 0.55.
   yawnMarThreshold: 0.55,
-  // Natural yawns last ~2–3s; require sustained open mouth before counting.
-  yawnMinDurationMs: 2500,
+  // Require sustained open mouth before counting (filters brief talking).
+  yawnMinDurationMs: 1500,
   yawnMemoryMs: 10 * 60_000,
   yawnAlertWindowMs: 60_000,
   yawnAlertCount: 3,
@@ -198,7 +198,8 @@ export const normalizeDetectionSettings = (
   if (
     typeof detection.yawnMinDurationMs !== 'number' ||
     !Number.isFinite(detection.yawnMinDurationMs) ||
-    detection.yawnMinDurationMs < 1500 ||
+    detection.yawnMinDurationMs < 1000 ||
+    detection.yawnMinDurationMs === 2500 ||
     (typeof legacyFrames === 'number' && legacyFrames > 0 && legacyFrames < 45)
   ) {
     detection.yawnMinDurationMs = DEFAULT_DETECTION.yawnMinDurationMs;

@@ -232,12 +232,12 @@ export default function SettingsPage() {
             />
             <NumberRow
               label="Minimum yawn duration"
-              value={Math.round((d.yawnMinDurationMs ?? 2500) / 100) / 10}
-              min={1.5}
+              value={Math.round((d.yawnMinDurationMs ?? 1500) / 100) / 10}
+              min={1}
               max={5}
               step={0.1}
               unit="sec"
-              hint="Mouth must stay open this long before a yawn is counted (natural yawns are ~2–3s)."
+              hint="Mouth must stay open this long before a yawn is counted (default 1.5s)."
               onChange={v => setDetection({ yawnMinDurationMs: Math.round(v * 1000) })}
             />
             <NumberRow
