@@ -9,6 +9,7 @@ import {
   AlertLevelSettings,
   getDefaultCalibration,
   getDefaultSettings,
+  normalizeUserSettings,
 } from '../services/storage';
 import {
   UserProfile,
@@ -46,7 +47,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const applyProfile = (profile: UserProfile | null) => ({
-  settings: profile?.settings ?? getDefaultSettings(),
+  settings: normalizeUserSettings(profile?.settings ?? getDefaultSettings()),
   calibration: profile?.calibration ?? getDefaultCalibration(),
 });
 

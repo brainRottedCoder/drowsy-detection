@@ -23,7 +23,10 @@ export interface DetectionSettings {
   headPoseScoreRange: number;
   // Yawn detection + multi-yawn alert
   yawnMarThreshold: number;
-  yawnFramesThreshold: number;
+  /** Minimum continuous open-mouth duration (ms) before a yawn is counted. Natural yawns are ~2–3s. */
+  yawnMinDurationMs: number;
+  /** @deprecated Prefer yawnMinDurationMs; kept for migrating older saved settings. */
+  yawnFramesThreshold?: number;
   yawnMemoryMs: number;
   yawnAlertWindowMs: number;
   yawnAlertCount: number;
@@ -97,21 +100,24 @@ export const DEFAULT_DETECTION: DetectionSettings = {
   // Natural blinks are ~100–500ms; camera lag often stretches them past 400ms.
   blinkMaxMs: 550,
   microsleepMs: 5000,
-  perclosWindowMs: 60_000,
+  // Keep recent closures briefly; live score also caps at PERCLOS_SCORE_WINDOW_MS in the hook.
+  perclosWindowMs: 15_000,
   blinkStatsWindowMs: 60_000,
   // Slightly higher closed ratio → more sensitive blink capture after calibration.
   earClosedRatio: 0.60,
   earOpenRatio: 0.75,
   earThresholdMin: 0.12,
   earThresholdMax: 0.22,
-  earScoreHistory: 8,
+  // Shorter EAR average → score tracks open/closed eyes faster.
+  earScoreHistory: 4,
   yawGateThreshold: 0.18,
   pitchGateDelta: 0.14,
   lookAwayDistractionMs: 4000,
   headPoseScoreRange: 0.35,
   // Closed ~0.0–0.1, talking ~0.3–0.45, yawning typically ≥ 0.55.
   yawnMarThreshold: 0.55,
-  yawnFramesThreshold: 10,
+  // Natural yawns last ~2–3s; require sustained open mouth before counting.
+  yawnMinDurationMs: 2500,
   yawnMemoryMs: 10 * 60_000,
   yawnAlertWindowMs: 60_000,
   yawnAlertCount: 3,
@@ -138,8 +144,9 @@ export const DEFAULT_ALERT_LEVELS: AlertLevelSettings = {
   cautionEnter: 50,
   warningEnter: 70,
   criticalEnter: 85,
-  downgradeHysteresis: 10,
-  downgradeStableMs: 2500,
+  downgradeHysteresis: 8,
+  // Clear alerts sooner once eyes stay open / score drops.
+  downgradeStableMs: 1000,
 };
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -174,6 +181,83 @@ export const saveSettings = (settings: UserSettings) => {
   localStorage.setItem(KEYS.SETTINGS, JSON.stringify(settings));
 };
 
+/** Merge + migrate detection settings (frame-based yawn → duration-based, etc.). */
+export const normalizeDetectionSettings = (
+  raw?: Partial<DetectionSettings> | null
+): DetectionSettings => {
+  const detection: DetectionSettings = {
+    ...DEFAULT_DETECTION,
+    ...(raw ?? {}),
+  };
+
+  if (detection.yawnMarThreshold >= 0.6 || detection.yawnMarThreshold <= 0.45) {
+    detection.yawnMarThreshold = DEFAULT_DETECTION.yawnMarThreshold;
+  }
+
+  const legacyFrames = detection.yawnFramesThreshold;
+  if (
+    typeof detection.yawnMinDurationMs !== 'number' ||
+    !Number.isFinite(detection.yawnMinDurationMs) ||
+    detection.yawnMinDurationMs < 1500 ||
+    (typeof legacyFrames === 'number' && legacyFrames > 0 && legacyFrames < 45)
+  ) {
+    detection.yawnMinDurationMs = DEFAULT_DETECTION.yawnMinDurationMs;
+  }
+  delete detection.yawnFramesThreshold;
+
+  if (detection.blinkMaxMs <= 400) {
+    detection.blinkMaxMs = DEFAULT_DETECTION.blinkMaxMs;
+  }
+  if (detection.earClosedRatio <= 0.55) {
+    detection.earClosedRatio = DEFAULT_DETECTION.earClosedRatio;
+  }
+  if (detection.microsleepMs <= 5000) {
+    detection.microsleepMs = DEFAULT_DETECTION.microsleepMs;
+  }
+  // Migrate older slow PERCLOS / EAR smoothing to the faster eye-tracking defaults.
+  if (detection.perclosWindowMs === 60_000) {
+    detection.perclosWindowMs = DEFAULT_DETECTION.perclosWindowMs;
+  }
+  if (detection.earScoreHistory === 8) {
+    detection.earScoreHistory = DEFAULT_DETECTION.earScoreHistory;
+  }
+
+  return detection;
+};
+
+export const normalizeUserSettings = (raw?: Partial<UserSettings> | null): UserSettings => {
+  const parsed = raw ?? {};
+  const detection = normalizeDetectionSettings(parsed.detection);
+  const alertLevels = { ...DEFAULT_ALERT_LEVELS, ...(parsed.alertLevels ?? {}) };
+
+  if ((parsed.alertLevels?.cautionEnter ?? 30) <= 30) {
+    alertLevels.cautionEnter = DEFAULT_ALERT_LEVELS.cautionEnter;
+    if ((parsed.alertLevels?.warningEnter ?? 50) <= 50) {
+      alertLevels.warningEnter = DEFAULT_ALERT_LEVELS.warningEnter;
+    }
+    if ((parsed.alertLevels?.criticalEnter ?? 75) <= 75) {
+      alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
+    }
+  }
+  if (parsed.alertLevels?.criticalEnter === 85) {
+    alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
+  }
+  if (parsed.alertLevels?.downgradeStableMs === 2500) {
+    alertLevels.downgradeStableMs = DEFAULT_ALERT_LEVELS.downgradeStableMs;
+  }
+  if (parsed.alertLevels?.downgradeHysteresis === 10) {
+    alertLevels.downgradeHysteresis = DEFAULT_ALERT_LEVELS.downgradeHysteresis;
+  }
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...parsed,
+    detection,
+    scoreWeights: { ...DEFAULT_SCORE_WEIGHTS, ...(parsed.scoreWeights ?? {}) },
+    alertLevels,
+  };
+};
+
 export const getSettings = (): UserSettings => {
   if (typeof window === 'undefined') return getDefaultSettings();
   const stored = localStorage.getItem(KEYS.SETTINGS);
@@ -181,63 +265,19 @@ export const getSettings = (): UserSettings => {
 
   try {
     const parsed = JSON.parse(stored) as Partial<UserSettings>;
-    const detection = { ...DEFAULT_DETECTION, ...(parsed.detection ?? {}) };
-
-    // Migrate prior less-sensitive / older yawn MAR defaults.
-    if (detection.yawnMarThreshold >= 0.6 || detection.yawnMarThreshold <= 0.45) {
-      detection.yawnMarThreshold = DEFAULT_DETECTION.yawnMarThreshold;
-    }
-    if (detection.yawnFramesThreshold >= 20) {
-      detection.yawnFramesThreshold = DEFAULT_DETECTION.yawnFramesThreshold;
-    }
-    // Migrate older blink timing that under-counted natural blinks.
-    if (detection.blinkMaxMs <= 400) {
-      detection.blinkMaxMs = DEFAULT_DETECTION.blinkMaxMs;
-    }
-    if (detection.earClosedRatio <= 0.55) {
-      detection.earClosedRatio = DEFAULT_DETECTION.earClosedRatio;
-    }
-    // Migrate prior microsleep defaults (2s / 2.5s / 5s / 8s) to current 4s.
-    if (
-      detection.microsleepMs <= 5000 
-    ) {
-      detection.microsleepMs = DEFAULT_DETECTION.microsleepMs;
-    }
-
-    const alertLevels = { ...DEFAULT_ALERT_LEVELS, ...(parsed.alertLevels ?? {}) };
-    // Migrate older caution threshold (30%) so CAUTION starts at 50%.
-    if ((parsed.alertLevels?.cautionEnter ?? 30) <= 30) {
-      alertLevels.cautionEnter = DEFAULT_ALERT_LEVELS.cautionEnter;
-      if ((parsed.alertLevels?.warningEnter ?? 50) <= 50) {
-        alertLevels.warningEnter = DEFAULT_ALERT_LEVELS.warningEnter;
-      }
-      if ((parsed.alertLevels?.criticalEnter ?? 75) <= 75) {
-        alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
-      }
-    }
-    // Migrate previous critical default (85%) to 77%.
-    if (parsed.alertLevels?.criticalEnter === 85) {
-      alertLevels.criticalEnter = DEFAULT_ALERT_LEVELS.criticalEnter;
-    }
-
-    const settings: UserSettings = {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      detection,
-      scoreWeights: { ...DEFAULT_SCORE_WEIGHTS, ...(parsed.scoreWeights ?? {}) },
-      alertLevels,
-    };
+    const settings = normalizeUserSettings(parsed);
 
     if (
-      parsed.detection?.yawnMarThreshold !== detection.yawnMarThreshold ||
-      parsed.detection?.yawnFramesThreshold !== detection.yawnFramesThreshold ||
-      parsed.detection?.blinkMaxMs !== detection.blinkMaxMs ||
-      parsed.detection?.earClosedRatio !== detection.earClosedRatio ||
-      parsed.detection?.earOpenRatio !== detection.earOpenRatio ||
-      parsed.detection?.microsleepMs !== detection.microsleepMs ||
-      parsed.alertLevels?.cautionEnter !== alertLevels.cautionEnter ||
-      parsed.alertLevels?.warningEnter !== alertLevels.warningEnter ||
-      parsed.alertLevels?.criticalEnter !== alertLevels.criticalEnter
+      parsed.detection?.yawnMarThreshold !== settings.detection.yawnMarThreshold ||
+      parsed.detection?.yawnMinDurationMs !== settings.detection.yawnMinDurationMs ||
+      parsed.detection?.yawnFramesThreshold != null ||
+      parsed.detection?.blinkMaxMs !== settings.detection.blinkMaxMs ||
+      parsed.detection?.earClosedRatio !== settings.detection.earClosedRatio ||
+      parsed.detection?.earOpenRatio !== settings.detection.earOpenRatio ||
+      parsed.detection?.microsleepMs !== settings.detection.microsleepMs ||
+      parsed.alertLevels?.cautionEnter !== settings.alertLevels.cautionEnter ||
+      parsed.alertLevels?.warningEnter !== settings.alertLevels.warningEnter ||
+      parsed.alertLevels?.criticalEnter !== settings.alertLevels.criticalEnter
     ) {
       localStorage.setItem(KEYS.SETTINGS, JSON.stringify(settings));
     }

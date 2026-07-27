@@ -72,9 +72,10 @@ const DEFAULT_BLINK_ENTER = 0.38;
 const DEFAULT_BLINK_EXIT = 0.22;
 const MIN_BLINK_MS = 0;
 const DEFAULT_BLINK_MAX_MS = 550;
-const PERCLOS_SCORE_WINDOW_MS = 20_000;
-const CLOSURE_RAMP_GRACE_MS = 600;
-const CLOSURE_RAMP_MS = 3800;
+/** Score PERCLOS over a short window so open eyes recover quickly. */
+const PERCLOS_SCORE_WINDOW_MS = 8_000;
+const CLOSURE_RAMP_GRACE_MS = 450;
+const CLOSURE_RAMP_MS = 2500;
 
 export const useDrowsiness = (
   landmarks: any[],
@@ -127,7 +128,7 @@ export const useDrowsiness = (
   const lastPitchRef = useRef<number | null>(null);
   const earScoreHistoryRef = useRef<number[]>([]);
 
-  const mouthOpenFramesRef = useRef(0);
+  const mouthOpenSinceRef = useRef<number | null>(null);
   const yawnRegisteredRef = useRef(false);
   const yawnTimestampsRef = useRef<number[]>([]);
 
@@ -321,7 +322,7 @@ export const useDrowsiness = (
       0.2,
       1.2
     );
-    const yawnFrames = Math.max(5, Math.round(d.yawnFramesThreshold));
+    const yawnMinDurationMs = Math.max(1500, Math.round(d.yawnMinDurationMs ?? 2500));
     const yawnMemoryMs = Math.max(60_000, d.yawnMemoryMs);
     const yawnAlertWindowMs = Math.max(10_000, d.yawnAlertWindowMs);
     const yawnAlertCount = Math.max(2, Math.round(d.yawnAlertCount));
@@ -379,14 +380,17 @@ export const useDrowsiness = (
     lastPitchRef.current = pitch;
 
     if (!isLookingAway && mar > yawnMar) {
-      mouthOpenFramesRef.current += 1;
-      if (mouthOpenFramesRef.current >= yawnFrames && !yawnRegisteredRef.current) {
+      if (mouthOpenSinceRef.current === null) {
+        mouthOpenSinceRef.current = now;
+      }
+      const openForMs = now - mouthOpenSinceRef.current;
+      if (openForMs >= yawnMinDurationMs && !yawnRegisteredRef.current) {
         yawnRegisteredRef.current = true;
         yawnTimestampsRef.current.push(now);
         setYawnCount(prev => prev + 1);
       }
     } else {
-      mouthOpenFramesRef.current = 0;
+      mouthOpenSinceRef.current = null;
       yawnRegisteredRef.current = false;
     }
     setIsYawning(yawnRegisteredRef.current);
@@ -782,7 +786,7 @@ export const useDrowsiness = (
     bothEyesClosedSinceRef.current = null;
     bothEyesClosedLatchedRef.current = false;
     monitoringStartRef.current = Date.now();
-    mouthOpenFramesRef.current = 0;
+    mouthOpenSinceRef.current = null;
     yawnRegisteredRef.current = false;
     yawnTimestampsRef.current = [];
     setYawnsPerMinute(0);

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { clsx } from 'clsx';
+import { cn } from '@/lib/utils'
 import type { AlertLevel } from '../../hooks/useDrowsiness';
 import type { FacePresenceState } from '../../hooks/useFacePresence';
 import type { EyeVisibilityState } from '../../hooks/eyeVisibility/types';
@@ -90,7 +90,7 @@ function MetricRow({
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
       <span className="text-slate-400">{label}</span>
-      <span className={clsx('font-mono font-medium tabular-nums', accent ?? 'text-slate-100')}>
+      <span className={cn('font-mono font-medium tabular-nums', accent ?? 'text-slate-100')}>
         {value}
       </span>
     </div>
@@ -100,7 +100,7 @@ function MetricRow({
 function FlagChip({ active, label, tone }: { active: boolean; label: string; tone: string }) {
   return (
     <span
-      className={clsx(
+      className={cn(
         'rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors',
         active ? tone : 'bg-slate-800 text-slate-500'
       )}
@@ -251,7 +251,7 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
           Detection Analysis
         </h3>
         <span
-          className={clsx(
+          className={cn(
             'text-[10px] font-mono uppercase tracking-wider',
             detection.isModelReady ? 'text-emerald-400' : 'text-slate-500'
           )}
@@ -345,7 +345,7 @@ export const DetectionActivityPanel: React.FC<DetectionActivityPanelProps> = ({ 
                 className="flex gap-2.5 items-start rounded-lg bg-slate-900/60 px-3 py-2 border border-slate-700/60"
               >
                 <span
-                  className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full', SEVERITY_STYLES[entry.severity])}
+                  className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', SEVERITY_STYLES[entry.severity])}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">

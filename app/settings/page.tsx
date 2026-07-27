@@ -231,12 +231,14 @@ export default function SettingsPage() {
               onChange={v => setDetection({ yawnMarThreshold: v })}
             />
             <NumberRow
-              label="Sustained open-mouth frames"
-              value={d.yawnFramesThreshold}
-              min={5}
-              max={60}
-              hint="Consecutive frames above MAR before a yawn is registered (~30fps)."
-              onChange={v => setDetection({ yawnFramesThreshold: Math.round(v) })}
+              label="Minimum yawn duration"
+              value={Math.round((d.yawnMinDurationMs ?? 2500) / 100) / 10}
+              min={1.5}
+              max={5}
+              step={0.1}
+              unit="sec"
+              hint="Mouth must stay open this long before a yawn is counted (natural yawns are ~2–3s)."
+              onChange={v => setDetection({ yawnMinDurationMs: Math.round(v * 1000) })}
             />
             <NumberRow
               label="Yawn memory (score)"
