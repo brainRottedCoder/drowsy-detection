@@ -18,6 +18,10 @@ jest.mock('../../context/AppContext', () => ({
   }),
 }));
 
+jest.mock('../../hooks/useFacePresence', () => ({
+  useFacePresence: () => ({ presence: 'PRESENT' }),
+}));
+
 describe('useDrowsiness', () => {
   it('should initialize with default state', () => {
     const { result } = renderHook(() => useDrowsiness([]));

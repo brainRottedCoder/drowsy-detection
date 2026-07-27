@@ -32,3 +32,9 @@ venv/
 
 # onnxruntime-web WASM copied by scripts/copy-ort-wasm.mjs (postinstall)
 /public/ort/
+
+# MediaPipe WASM copied by scripts/copy-mediapipe-wasm.mjs (postinstall)
+/public/mediapipe/
+
+# face_landmarker.task is fetched once by scripts/fetch-face-landmarker.mjs
+# and should be committed when present so clones work offline without Google Storage.

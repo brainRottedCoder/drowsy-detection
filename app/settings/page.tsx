@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAppContext } from '../../context/AppContext';
 import { Button } from '../../components/ui/Button';
+import { UserSwitcher } from '../../components/UserSwitcher/UserSwitcher';
 import {
   SectionCard,
   SliderRow,
@@ -44,6 +46,7 @@ function clampAlertLevels(patch: Partial<AlertLevelSettings>, current: AlertLeve
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
   const {
     settings,
     updateSettings,
@@ -53,9 +56,17 @@ export default function SettingsPage() {
     calibration,
     resetCalibration,
     resetDetectionDefaults,
+    currentUser,
+    isUserReady,
   } = useAppContext();
 
   const { detection: d, scoreWeights: w, alertLevels: a } = settings;
+
+  useEffect(() => {
+    if (isUserReady && !currentUser) {
+      router.replace('/');
+    }
+  }, [isUserReady, currentUser, router]);
 
   const scoreSum = useMemo(
     () => w.perclos + w.ear + w.blinkRate + w.yawn + w.headPose,
@@ -76,6 +87,14 @@ export default function SettingsPage() {
     updateScoreWeights(next);
   };
 
+  if (!isUserReady || !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 p-6">
       <div className="max-w-2xl mx-auto pb-16">
@@ -86,17 +105,20 @@ export default function SettingsPage() {
             </Link>
             <h1 className="text-3xl font-bold text-slate-900">Settings</h1>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (confirm('Reset all detection, score, and alert settings to defaults?')) {
-                resetDetectionDefaults();
-              }
-            }}
-          >
-            Reset detection defaults
-          </Button>
+          <div className="flex items-center gap-2">
+            <UserSwitcher />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (confirm('Reset all detection, score, and alert settings to defaults?')) {
+                  resetDetectionDefaults();
+                }
+              }}
+            >
+              Reset detection defaults
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -490,12 +512,18 @@ export default function SettingsPage() {
           </SectionCard>
 
           {/* 9. Calibration */}
-          <SectionCard title="Calibration" description="Personal baselines from the last calibration run.">
+          <SectionCard title="Calibration" description="Personal baselines from the last face profile run.">
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-slate-500 text-xs uppercase tracking-wide">EAR threshold</p>
+                <p className="text-slate-500 text-xs uppercase tracking-wide">Close threshold</p>
                 <p className="font-mono font-semibold text-slate-900 mt-1">
                   {calibration.threshold.toFixed(3)}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-slate-500 text-xs uppercase tracking-wide">Open threshold</p>
+                <p className="font-mono font-semibold text-slate-900 mt-1">
+                  {calibration.openThreshold != null ? calibration.openThreshold.toFixed(3) : '—'}
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 p-3">
@@ -505,9 +533,23 @@ export default function SettingsPage() {
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-slate-500 text-xs uppercase tracking-wide">Closed EAR</p>
+                <p className="font-mono font-semibold text-slate-900 mt-1">
+                  {calibration.closedEAR != null ? calibration.closedEAR.toFixed(3) : '—'}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
                 <p className="text-slate-500 text-xs uppercase tracking-wide">Blink rate</p>
                 <p className="font-mono font-semibold text-slate-900 mt-1">
                   {calibration.baselineBlinkRate.toFixed(1)} / min
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-slate-500 text-xs uppercase tracking-wide">Yawn MAR</p>
+                <p className="font-mono font-semibold text-slate-900 mt-1">
+                  {calibration.yawnMarThreshold != null
+                    ? calibration.yawnMarThreshold.toFixed(2)
+                    : '—'}
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 p-3">
@@ -516,10 +558,23 @@ export default function SettingsPage() {
                   {calibration.isCalibrated ? 'Calibrated' : 'Not calibrated'}
                 </p>
               </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-slate-500 text-xs uppercase tracking-wide">Calibrated at</p>
+                <p className="font-semibold text-slate-900 mt-1 text-xs">
+                  {calibration.calibratedAt
+                    ? new Date(calibration.calibratedAt).toLocaleString()
+                    : '—'}
+                </p>
+              </div>
             </div>
-            <Button variant="outline" onClick={resetCalibration}>
-              Reset Calibration
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/monitor?calibrate=1">
+                <Button variant="primary">Start guided recalibration</Button>
+              </Link>
+              <Button variant="outline" onClick={resetCalibration}>
+                Reset Calibration
+              </Button>
+            </div>
           </SectionCard>
 
           {/* 10. Privacy */}

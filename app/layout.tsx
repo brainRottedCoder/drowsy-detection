@@ -1,15 +1,10 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
-import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { AppProvider } from '../context/AppContext'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
-
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
+  title: 'Drowsy Detector',
+  description: 'Offline browser-based drowsiness detection',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -37,11 +32,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`font-sans antialiased ${_geist.variable} ${_geistMono.variable}`}>
+      <body className="font-sans antialiased">
         <AppProvider>
           {children}
         </AppProvider>
-        <Analytics />
       </body>
     </html>
   )

@@ -9,10 +9,9 @@ interface UseFaceLandmarksReturn {
   error: string | null;
 }
 
-const MEDIAPIPE_VERSION = '0.10.22-rc.20250304';
-const WASM_ROOT = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`;
-const MODEL_PATH =
-  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+/** Same-origin assets vendored by scripts/vendor-assets.mjs (offline). */
+const WASM_ROOT = '/mediapipe/wasm';
+const MODEL_PATH = '/models/face_landmarker.task';
 
 /** TFLite logs routine CPU-delegate INFO via console.error; Next.js surfaces that as a red overlay. */
 const isBenignTfLiteLog = (args: unknown[]) => {

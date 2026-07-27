@@ -2,8 +2,22 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { calculateEAR, calculateMAR, estimateHeadPose } from '../utils/math';
 import { useAppContext } from '../context/AppContext';
 import { useFacePresence, FacePresenceState } from './useFacePresence';
-import type { DetectionSettings } from '../services/storage';
-import { DEFAULT_DETECTION } from '../services/storage';
+import {
+  CalibrationPhase,
+  CalibrationPreview,
+  MIN_CALIBRATION_BLINKS,
+  MIN_CLOSED_FRAMES,
+  MIN_OPEN_FRAMES,
+  PHASE_MAX_MS,
+  buildCalibrationPreview,
+  deriveClosedThreshold,
+  emptyCalibrationBuffers,
+  nextPhase,
+  previewToCalibrationData,
+  type CalibrationSampleBuffers,
+} from '../utils/calibration';
+
+export { deriveClosedThreshold };
 
 // Indices for MediaPipe Face Mesh
 const LEFT_EYE_INDICES = [33, 160, 158, 133, 153, 144];
@@ -42,21 +56,22 @@ interface UseDrowsinessReturn {
   startCalibration: () => void;
   stopCalibration: () => void;
   calibrationProgress: number;
+  calibrationPhase: CalibrationPhase;
+  calibrationPhaseProgress: number;
+  calibrationPhaseStartedAt: number | null;
+  calibrationError: string | null;
+  calibrationPreview: CalibrationPreview | null;
+  confirmCalibration: () => void;
+  retryCalibration: () => void;
   resetState: () => void;
 }
 
-/** Blendshape enter/exit for eyeBlinkLeft/Right (MediaPipe 0–1). */
-const BLINK_ENTER = 0.38;
-const BLINK_EXIT = 0.22;
-/** Ignore only true zero-duration glitches; single-frame blendshape blinks are valid. */
+const DEFAULT_BLINK_ENTER = 0.38;
+const DEFAULT_BLINK_EXIT = 0.22;
 const MIN_BLINK_MS = 0;
-/** Cap single-blink contribution so long closures don't count as blinks. */
 const DEFAULT_BLINK_MAX_MS = 550;
-/** PERCLOS score window — responsive, but not so short that brief dips spike the meter. */
 const PERCLOS_SCORE_WINDOW_MS = 20_000;
-/** Ignore normal blink length before the closed-eye ramp starts. */
 const CLOSURE_RAMP_GRACE_MS = 600;
-/** After grace, duration that maps to ~100% on the closure ramp. */
 const CLOSURE_RAMP_MS = 3800;
 
 export const useDrowsiness = (
@@ -84,20 +99,24 @@ export const useDrowsiness = (
 
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [calibrationProgress, setCalibrationProgress] = useState(0);
-  const calibrationEARRef = useRef<number[]>([]);
-  const calibrationYawRef = useRef<number[]>([]);
-  const calibrationPitchRef = useRef<number[]>([]);
-  const calibrationBlinkEventsRef = useRef<BlinkStat[]>([]);
+  const [calibrationPhase, setCalibrationPhase] = useState<CalibrationPhase>('idle');
+  const [calibrationPhaseProgress, setCalibrationPhaseProgress] = useState(0);
+  const [calibrationPhaseStartedAt, setCalibrationPhaseStartedAt] = useState<number | null>(null);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [calibrationPreview, setCalibrationPreview] = useState<CalibrationPreview | null>(null);
+
   const calibrationStartRef = useRef<number>(0);
+  const phaseStartRef = useRef<number>(0);
+  const buffersRef = useRef<CalibrationSampleBuffers>(emptyCalibrationBuffers());
+  const skippedMouthRef = useRef(false);
+  const calibrationPhaseRef = useRef<CalibrationPhase>('idle');
+  const phaseBlinkCountRef = useRef(0);
 
   const closedSinceRef = useRef<number | null>(null);
-  /** Microsleep timer — only advances while BOTH eyes are closed. */
   const bothEyesClosedSinceRef = useRef<number | null>(null);
   const eyesClosedLatchedRef = useRef(false);
-  /** Latch for both-eyes-closed (stricter than blink latch). */
   const bothEyesClosedLatchedRef = useRef(false);
   const closureIntervalsRef = useRef<ClosureInterval[]>([]);
-  /** Completed blinks only — used for blinks/min (kept separate from PERCLOS closures). */
   const blinkEventsRef = useRef<BlinkStat[]>([]);
   const monitoringStartRef = useRef<number>(Date.now());
 
@@ -112,6 +131,9 @@ export const useDrowsiness = (
   const alertLevelRef = useRef<AlertLevel>('NONE');
   const belowLevelSinceRef = useRef<number | null>(null);
 
+  const blinkEnter = calibration.blendshapeBlinkEnter ?? DEFAULT_BLINK_ENTER;
+  const blinkExit = calibration.blendshapeBlinkExit ?? DEFAULT_BLINK_EXIT;
+
   const levelThresholds = (): { level: AlertLevel; enter: number }[] => [
     { level: 'CRITICAL', enter: clamp(levels.criticalEnter, 1, 100) },
     { level: 'WARNING', enter: clamp(levels.warningEnter, 1, 99) },
@@ -119,9 +141,144 @@ export const useDrowsiness = (
     { level: 'NONE', enter: 0 },
   ];
 
+  const setPhase = (phase: CalibrationPhase) => {
+    calibrationPhaseRef.current = phase;
+    setCalibrationPhase(phase);
+    const started = Date.now();
+    phaseStartRef.current = started;
+    setCalibrationPhaseStartedAt(phase === 'idle' || phase === 'summary' ? null : started);
+    setCalibrationPhaseProgress(0);
+    if (phase === 'soft_blinks') {
+      phaseBlinkCountRef.current = 0;
+    }
+  };
+
+  const finalizeToSummary = useCallback(() => {
+    skippedMouthRef.current = true;
+    const preview = buildCalibrationPreview(buffersRef.current, d, {
+      durationMs: Date.now() - calibrationStartRef.current,
+      skippedMouth: true,
+    });
+    setCalibrationPreview(preview);
+    if (!preview.gapOk) {
+      setCalibrationError(preview.gapError ?? 'Calibration failed. Please retry.');
+    } else {
+      setCalibrationError(null);
+    }
+    setPhase('summary');
+    setCalibrationProgress(100);
+    setCalibrationPhaseProgress(100);
+  }, [d]);
+
+  const processCalibrationFrame = (
+    now: number,
+    leftEAR: number,
+    rightEAR: number,
+    avgEAR: number,
+    mar: number,
+    yaw: number,
+    pitch: number,
+    blinkMaxMs: number,
+    microsleepMs: number
+  ) => {
+    const phase = calibrationPhaseRef.current;
+    if (phase === 'idle' || phase === 'summary') return;
+
+    if (facePresence !== 'PRESENT') {
+      setCalibrationError('Return to camera — face not detected.');
+      return;
+    }
+    if (calibrationError === 'Return to camera — face not detected.') {
+      setCalibrationError(null);
+    }
+
+    const buf = buffersRef.current;
+    const phaseElapsed = now - phaseStartRef.current;
+    const maxMs = PHASE_MAX_MS[phase as keyof typeof PHASE_MAX_MS] ?? 5000;
+
+    const eitherClosed = resolveEitherEyeClosed(leftEAR, rightEAR, blendshapes);
+    const prevBlinkCount = buf.blinkEvents.length;
+    trackBlinkSignal(eitherClosed, now, blinkMaxMs, microsleepMs, true);
+    if (buf.blinkEvents.length > prevBlinkCount) {
+      phaseBlinkCountRef.current += buf.blinkEvents.length - prevBlinkCount;
+      const peak = Math.max(blendshapes.eyeBlinkLeft ?? 0, blendshapes.eyeBlinkRight ?? 0);
+      if (peak > 0.2) buf.blendshapePeaks.push(peak);
+    }
+    trackBothEyesClosed(resolveBothEyesClosed(leftEAR, rightEAR, blendshapes), now);
+
+    let ready = false;
+
+    // Head pose is collected in the background during all eye phases.
+    const sampleHeadPose = () => {
+      buf.yaw.push(yaw);
+      buf.pitch.push(pitch);
+      if (Math.abs(yaw) < 0.1 && Math.abs(pitch) < 0.1) {
+        buf.centerYaw.push(yaw);
+        buf.centerPitch.push(pitch);
+      }
+    };
+
+    switch (phase) {
+      case 'setup':
+        sampleHeadPose();
+        ready = phaseElapsed >= maxMs;
+        break;
+      case 'open_eyes':
+        buf.openEAR.push(avgEAR);
+        buf.leftOpenEAR.push(leftEAR);
+        buf.rightOpenEAR.push(rightEAR);
+        sampleHeadPose();
+        buf.marResting.push(mar);
+        ready = buf.openEAR.length >= MIN_OPEN_FRAMES && phaseElapsed >= 3000;
+        if (phaseElapsed >= maxMs && buf.openEAR.length >= Math.floor(MIN_OPEN_FRAMES * 0.6)) {
+          ready = true;
+        }
+        break;
+      case 'soft_blinks':
+        buf.openEAR.push(avgEAR);
+        sampleHeadPose();
+        ready =
+          phaseBlinkCountRef.current >= MIN_CALIBRATION_BLINKS && phaseElapsed >= 2500;
+        if (phaseElapsed >= maxMs) ready = true;
+        break;
+      case 'closed_eyes':
+        buf.closedEAR.push(avgEAR);
+        sampleHeadPose();
+        ready = buf.closedEAR.length >= MIN_CLOSED_FRAMES && phaseElapsed >= 2500;
+        if (phaseElapsed >= maxMs && buf.closedEAR.length >= Math.floor(MIN_CLOSED_FRAMES * 0.6)) {
+          ready = true;
+        }
+        break;
+      default:
+        break;
+    }
+
+    setCalibrationPhaseProgress(Math.min(100, (phaseElapsed / Math.max(maxMs, 1)) * 100));
+
+    const livePhases = ['setup', 'open_eyes', 'soft_blinks', 'closed_eyes'] as const;
+    const phaseIndex = livePhases.indexOf(phase as (typeof livePhases)[number]);
+    const overall =
+      phaseIndex < 0 ? 100 : ((phaseIndex + phaseElapsed / maxMs) / livePhases.length) * 100;
+    setCalibrationProgress(Math.min(99, overall));
+
+    if (!ready) return;
+
+    if (phase === 'closed_eyes') {
+      // Head pose already sampled in background during eye phases.
+      finalizeToSummary();
+      return;
+    }
+
+    const upcoming = nextPhase(phase);
+    if (upcoming === 'summary') {
+      finalizeToSummary();
+    } else {
+      setPhase(upcoming);
+    }
+  };
+
   const processFrame = useCallback(() => {
     if (!landmarks || landmarks.length === 0) {
-      // Face dropped — finish any open blink so it still counts.
       if (closedSinceRef.current !== null) {
         const now = Date.now();
         const blinkMaxMs = Math.max(100, d.blinkMaxMs);
@@ -132,6 +289,9 @@ export const useDrowsiness = (
       bothEyesClosedLatchedRef.current = false;
       setIsMicrosleep(false);
       lookAwaySinceRef.current = null;
+      if (isCalibrating && calibrationPhaseRef.current !== 'summary' && calibrationPhaseRef.current !== 'idle') {
+        setCalibrationError('Return to camera — face not detected.');
+      }
       return;
     }
 
@@ -140,10 +300,22 @@ export const useDrowsiness = (
     const microsleepMs = Math.max(blinkMaxMs + 100, d.microsleepMs);
     const perclosWindowMs = Math.max(5000, d.perclosWindowMs);
     const blinkStatsWindowMs = Math.max(5000, d.blinkStatsWindowMs);
-    const yawGate = clamp(d.yawGateThreshold, 0.05, 0.5);
-    const pitchGate = clamp(d.pitchGateDelta, 0.05, 0.5);
+    const yawGate = clamp(
+      calibration.yawGateThreshold ?? d.yawGateThreshold,
+      0.05,
+      0.5
+    );
+    const pitchGate = clamp(
+      calibration.pitchGateDelta ?? d.pitchGateDelta,
+      0.05,
+      0.5
+    );
     const lookAwayMs = Math.max(1000, d.lookAwayDistractionMs);
-    const yawnMar = clamp(d.yawnMarThreshold, 0.2, 1.2);
+    const yawnMar = clamp(
+      calibration.yawnMarThreshold ?? d.yawnMarThreshold,
+      0.2,
+      1.2
+    );
     const yawnFrames = Math.max(5, Math.round(d.yawnFramesThreshold));
     const yawnMemoryMs = Math.max(60_000, d.yawnMemoryMs);
     const yawnAlertWindowMs = Math.max(10_000, d.yawnAlertWindowMs);
@@ -164,33 +336,23 @@ export const useDrowsiness = (
     const isLookingAway = Math.abs(yaw) > yawGate;
 
     if (isCalibrating) {
-      calibrationEARRef.current.push(avgEAR);
-      calibrationYawRef.current.push(yaw);
-      calibrationPitchRef.current.push(pitch);
-
-      const elapsed = now - calibrationStartRef.current;
-      setCalibrationProgress(Math.min(100, (elapsed / 5000) * 100));
-      // Prefer blendshapes during calibration too — more reliable blink samples.
-      trackBlinkSignal(
-        resolveEitherEyeClosed(leftEAR, rightEAR, blendshapes),
+      processCalibrationFrame(
         now,
+        leftEAR,
+        rightEAR,
+        avgEAR,
+        mar,
+        yaw,
+        pitch,
         blinkMaxMs,
-        microsleepMs,
-        true
+        microsleepMs
       );
-      trackBothEyesClosed(resolveBothEyesClosed(leftEAR, rightEAR, blendshapes), now);
-
-      if (elapsed >= 5000) {
-        finishCalibration();
-      }
       return;
     }
 
     const pitchDelta = Math.abs(pitch - calibration.baselinePitch);
     const poseUnreliable = isLookingAway || pitchDelta > pitchGate;
 
-    // Blink counting: either eye may close (asymmetric blinks still count).
-    // Microsleep: both eyes must stay closed for microsleepMs.
     const eitherEyeClosed = resolveEitherEyeClosed(leftEAR, rightEAR, blendshapes);
     const bothEyesClosed = resolveBothEyesClosed(leftEAR, rightEAR, blendshapes);
     trackBlinkSignal(eitherEyeClosed, now, blinkMaxMs, microsleepMs, false);
@@ -250,16 +412,25 @@ export const useDrowsiness = (
     landmarks,
     blendshapes,
     isCalibrating,
+    facePresence,
+    calibrationError,
     calibration.baselinePitch,
     calibration.baselineYaw,
     calibration.baselineEAR,
     calibration.baselineBlinkRate,
     calibration.baselineBlinkDurationMs,
     calibration.threshold,
+    calibration.openThreshold,
+    calibration.yawGateThreshold,
+    calibration.pitchGateDelta,
+    calibration.yawnMarThreshold,
+    calibration.blendshapeBlinkEnter,
+    calibration.blendshapeBlinkExit,
     settings.sensitivity,
     d,
     w,
     levels,
+    finalizeToSummary,
   ]);
 
   const earCloseOpenThresholds = () => {
@@ -267,15 +438,19 @@ export const useDrowsiness = (
       calibration.threshold || 0.18,
       (calibration.baselineEAR || 0.3) * 0.7
     );
-    const openAt = closeAt + 0.04;
-    return { closeAt, openAt };
+    if (
+      typeof calibration.openThreshold === 'number' &&
+      Number.isFinite(calibration.openThreshold) &&
+      (calibration.profileVersion ?? 0) >= 2
+    ) {
+      return {
+        closeAt,
+        openAt: Math.max(closeAt + 0.02, calibration.openThreshold),
+      };
+    }
+    return { closeAt, openAt: closeAt + 0.04 };
   };
 
-  /**
-   * Eye closed?
-   * - loose (OR): blink counting — catch asymmetric / laggy blinks
-   * - strict: drowsiness / microsleep — need stronger evidence than a single noisy signal
-   */
   const isEyeClosed = (
     ear: number,
     blink: number | undefined,
@@ -286,16 +461,14 @@ export const useDrowsiness = (
   ): boolean => {
     const byEar = latched ? ear <= openAt : ear < closeAt;
     if (typeof blink !== 'number') return byEar;
-    const byBlink = latched ? blink > BLINK_EXIT : blink >= BLINK_ENTER;
+    const byBlink = latched ? blink > blinkExit : blink >= blinkEnter;
     if (mode === 'loose') return byBlink || byEar;
-    // Strict: strong blink alone, or EAR-closed with at least a mild blink signal.
     if (latched) {
-      return blink > BLINK_EXIT && (byEar || blink > 0.45);
+      return blink > blinkExit && (byEar || blink > 0.45);
     }
-    return blink >= BLINK_ENTER || (byEar && blink >= 0.28);
+    return blink >= blinkEnter || (byEar && blink >= 0.28);
   };
 
-  /** Either eye closed — used for blink counting (asymmetric OK). */
   const resolveEitherEyeClosed = (
     leftEAR: number,
     rightEAR: number,
@@ -309,7 +482,6 @@ export const useDrowsiness = (
     );
   };
 
-  /** Both eyes closed — required for microsleep / drowsiness ramp. */
   const resolveBothEyesClosed = (
     leftEAR: number,
     rightEAR: number,
@@ -334,25 +506,31 @@ export const useDrowsiness = (
     }
   };
 
-  const classifyClosure = (durationMs: number, blinkMaxMs: number, microsleepMs: number): ClosureInterval['type'] => {
+  const classifyClosure = (
+    durationMs: number,
+    blinkMaxMs: number,
+    microsleepMs: number
+  ): ClosureInterval['type'] => {
     if (durationMs >= microsleepMs) return 'microsleep';
     if (durationMs >= blinkMaxMs) return 'droop';
     return 'blink';
   };
 
-  const recordCompletedBlink = (now: number, durationMs: number, blinkMaxMs: number, forCalibration: boolean) => {
-    // Count any completed close→open cycle under blinkMaxMs (incl. single-frame spikes).
+  const recordCompletedBlink = (
+    now: number,
+    durationMs: number,
+    blinkMaxMs: number,
+    forCalibration: boolean
+  ) => {
     if (durationMs < MIN_BLINK_MS || durationMs >= blinkMaxMs) return;
     if (forCalibration) {
-      calibrationBlinkEventsRef.current.push({ timestamp: now, durationMs: Math.max(durationMs, 1) });
+      buffersRef.current.blinkEvents.push({ durationMs: Math.max(durationMs, 1) });
       return;
     }
     blinkEventsRef.current.push({ timestamp: now, durationMs: Math.max(durationMs, 1) });
-    // Push UI immediately so the stats panel ticks up as soon as a blink finishes.
     refreshBlinkRate(now);
   };
 
-  /** Blink rate = number of blinks completed in the last 60 seconds. */
   const refreshBlinkRate = (now: number) => {
     const windowMs = Math.max(5000, d.blinkStatsWindowMs || 60_000);
     blinkEventsRef.current = blinkEventsRef.current.filter(b => now - b.timestamp < windowMs);
@@ -428,8 +606,6 @@ export const useDrowsiness = (
     const intervals = closureIntervalsRef.current;
     const activeIdx = closedSinceRef.current !== null ? intervals.length - 1 : -1;
 
-    // Count droops/microsleeps + the *active* closure (even while still typed as blink).
-    // Completed short blinks stay excluded so normal blinking doesn't inflate PERCLOS.
     const closedMs = intervals.reduce((sum, iv, idx) => {
       const isActive = idx === activeIdx;
       if (iv.type === 'blink' && !isActive) return sum;
@@ -441,12 +617,9 @@ export const useDrowsiness = (
     const windowMs = Math.min(scoreWindowMs, Math.max(1000, now - monitoringStartRef.current));
     const perclos = Math.min(1, closedMs / windowMs);
 
-    // Blink rate = raw count of blinks in the last 1 minute (rolling window).
-    // Display-only — must not drive drowsiness score / alert level.
     refreshBlinkRate(now);
 
     const baselineEAR = calibration.baselineEAR || 0.3;
-    // Middle ground: closed eyes raise EAR score, but partial squints don't slam it to 1.
     const rawEarScore = clamp01((baselineEAR - avgEAR) / Math.max(baselineEAR * 0.8, 0.05));
     const historyLen = Math.max(2, Math.round(d.earScoreHistory));
     earScoreHistoryRef.current.push(rawEarScore);
@@ -469,8 +642,6 @@ export const useDrowsiness = (
     const pitchDev = Math.abs(pitch - (calibration.baselinePitch || 0));
     const headPoseScore = clamp01((yawDev + pitchDev) / headPoseRange);
 
-    // Sustained both-eyes-closed ramp (after blink grace):
-    // ~50% ≈ 2.5s total, ~77% ≈ 3.5s total, ~100% ≈ 4.4s total.
     const closedForMs =
       bothEyesClosedSinceRef.current !== null ? now - bothEyesClosedSinceRef.current : 0;
     const rampMs = Math.max(0, closedForMs - CLOSURE_RAMP_GRACE_MS);
@@ -485,7 +656,6 @@ export const useDrowsiness = (
 
     score = score * (0.5 + settings.sensitivity);
 
-    // Closed-eye ramp lifts toward alerts without the old instant ear*90 false positives.
     if (closureScore > 0) {
       score = Math.max(score, closureScore * 90);
     }
@@ -541,51 +711,39 @@ export const useDrowsiness = (
   const startCalibration = () => {
     setIsCalibrating(true);
     setCalibrationProgress(0);
+    setCalibrationError(null);
+    setCalibrationPreview(null);
+    skippedMouthRef.current = false;
+    buffersRef.current = emptyCalibrationBuffers();
     calibrationStartRef.current = Date.now();
-    calibrationEARRef.current = [];
-    calibrationYawRef.current = [];
-    calibrationPitchRef.current = [];
-    calibrationBlinkEventsRef.current = [];
     closedSinceRef.current = null;
     eyesClosedLatchedRef.current = false;
     bothEyesClosedSinceRef.current = null;
     bothEyesClosedLatchedRef.current = false;
+    setPhase('setup');
   };
 
   const stopCalibration = () => {
     setIsCalibrating(false);
     setCalibrationProgress(0);
+    setCalibrationPhaseProgress(0);
+    setCalibrationPhaseStartedAt(null);
+    setCalibrationError(null);
+    setCalibrationPreview(null);
+    calibrationPhaseRef.current = 'idle';
+    setCalibrationPhase('idle');
+    buffersRef.current = emptyCalibrationBuffers();
   };
 
-  const finishCalibration = () => {
-    const earSamples = calibrationEARRef.current;
-    if (earSamples.length === 0) return;
-
-    const baselineEAR = openEyeBaseline(earSamples);
-    const avgYaw = average(calibrationYawRef.current);
-    const avgPitch = average(calibrationPitchRef.current);
-
-    const calibrationDurationMin = (Date.now() - calibrationStartRef.current) / 60_000;
-    const blinkEvents = calibrationBlinkEventsRef.current;
-    const baselineBlinkRate =
-      calibrationDurationMin > 0
-        ? Math.max(6, blinkEvents.length / calibrationDurationMin)
-        : 17;
-    const baselineBlinkDurationMs = blinkEvents.length
-      ? blinkEvents.reduce((sum, b) => sum + b.durationMs, 0) / blinkEvents.length
-      : 250;
-
-    updateCalibration({
-      baselineEAR,
-      threshold: deriveClosedThreshold(baselineEAR, d),
-      isCalibrated: true,
-      baselineYaw: avgYaw,
-      baselinePitch: avgPitch,
-      baselineBlinkRate,
-      baselineBlinkDurationMs,
-    });
-
+  const confirmCalibration = () => {
+    const preview = calibrationPreview;
+    if (!preview || !preview.gapOk) return;
+    updateCalibration(previewToCalibrationData(preview));
     stopCalibration();
+  };
+
+  const retryCalibration = () => {
+    startCalibration();
   };
 
   const resetState = () => {
@@ -633,30 +791,16 @@ export const useDrowsiness = (
     startCalibration,
     stopCalibration,
     calibrationProgress,
+    calibrationPhase,
+    calibrationPhaseProgress,
+    calibrationPhaseStartedAt,
+    calibrationError,
+    calibrationPreview,
+    confirmCalibration,
+    retryCalibration,
     resetState,
   };
 };
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
-const average = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
-
-/** Closed-eye threshold from open-eye baseline, clamped to a sane absolute range. */
-export const deriveClosedThreshold = (
-  baselineEAR: number,
-  detection: DetectionSettings = DEFAULT_DETECTION
-): number => {
-  const closedRatio = clamp(detection.earClosedRatio, 0.3, 0.9);
-  const min = clamp(detection.earThresholdMin, 0.05, 0.3);
-  const max = clamp(detection.earThresholdMax, min + 0.02, 0.4);
-  const ratioBased = baselineEAR * closedRatio;
-  return Math.min(max, Math.max(min, ratioBased));
-};
-
-const openEyeBaseline = (samples: number[]): number => {
-  if (samples.length === 0) return 0.3;
-  const sorted = [...samples].sort((a, b) => a - b);
-  const upper = sorted.slice(Math.floor(sorted.length / 2));
-  const mid = Math.floor(upper.length / 2);
-  return upper.length % 2 === 0 ? (upper[mid - 1] + upper[mid]) / 2 : upper[mid];
-};

@@ -35,7 +35,7 @@ export const MapPanel: React.FC<MapPanelProps> = ({ isDrowsy }) => {
       
       <div className="flex-1 bg-slate-100 relative">
         {/* Mock Map Visualization */}
-        <div className="absolute inset-0 opacity-50 bg-[url('https://assets.codepen.io/6093409/map-placeholder.png')] bg-cover bg-center" />
+        <div className="absolute inset-0 opacity-50 bg-[url('/placeholder.jpg')] bg-cover bg-center" />
         
         {/* Route Line Mock */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none">

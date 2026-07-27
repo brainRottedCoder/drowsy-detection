@@ -70,6 +70,23 @@ export interface CalibrationData {
   baselineBlinkDurationMs: number;
   baselineYaw: number;
   baselinePitch: number;
+  /** Measured closed-eye EAR median (profile v2+). */
+  closedEAR?: number;
+  /** Re-open hysteresis threshold (profile v2+). */
+  openThreshold?: number;
+  leftBaselineEAR?: number;
+  rightBaselineEAR?: number;
+  /** Personal look-away yaw gate; overrides detection.yawGateThreshold when set. */
+  yawGateThreshold?: number;
+  /** Personal pitch gate delta; overrides detection.pitchGateDelta when set. */
+  pitchGateDelta?: number;
+  baselineMAR?: number;
+  yawnMarThreshold?: number;
+  blendshapeBlinkEnter?: number;
+  blendshapeBlinkExit?: number;
+  calibratedAt?: number;
+  /** Schema version; guided face profile writes 2. */
+  profileVersion?: number;
 }
 
 export const DEFAULT_DETECTION: DetectionSettings = {
@@ -229,19 +246,23 @@ export const saveCalibration = (data: CalibrationData) => {
 };
 
 export const getCalibration = (): CalibrationData => {
-  if (typeof window === 'undefined') return DEFAULT_CALIBRATION;
+  if (typeof window === 'undefined') return getDefaultCalibration();
   const stored = localStorage.getItem(KEYS.CALIBRATION);
-  if (!stored) return DEFAULT_CALIBRATION;
+  if (!stored) return getDefaultCalibration();
 
-  const parsed = { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } as CalibrationData;
+  try {
+    const parsed = { ...DEFAULT_CALIBRATION, ...JSON.parse(stored) } as CalibrationData;
 
-  if (parsed.threshold > 0.22) {
-    const migrated = Math.min(0.22, Math.max(0.12, parsed.baselineEAR * 0.60));
-    parsed.threshold = migrated;
-    localStorage.setItem(KEYS.CALIBRATION, JSON.stringify(parsed));
+    if (parsed.threshold > 0.22) {
+      const migrated = Math.min(0.22, Math.max(0.12, parsed.baselineEAR * 0.60));
+      parsed.threshold = migrated;
+      localStorage.setItem(KEYS.CALIBRATION, JSON.stringify(parsed));
+    }
+
+    return parsed;
+  } catch {
+    return getDefaultCalibration();
   }
-
-  return parsed;
 };
 
 export const getDefaultCalibration = (): CalibrationData => ({ ...DEFAULT_CALIBRATION });
