@@ -313,7 +313,7 @@ export default function SettingsPage() {
 
           {/* 5. Eye visibility */}
           <SectionCard
-            title="Eyes in the frame"
+            title="Sunglasses"
             description="Warns when eyes are blocked (sunglasses, hand covering). Clear glasses and closed lids stay visible. Does not pause drowsiness scoring."
           >
             <div className="flex items-center justify-between gap-4">

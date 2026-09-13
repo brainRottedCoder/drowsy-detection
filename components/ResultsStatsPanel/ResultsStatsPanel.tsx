@@ -58,8 +58,8 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
   const eyesLabel = !eyesInFrameReady
     ? 'Checking…'
     : eyesNotInFrame
-      ? 'Not visible'
-      : 'Visible';
+      ? 'Weared'
+      : 'Not weared';
   const eyesAccent = !eyesInFrameReady
     ? 'text-amber-300'
     : eyesNotInFrame
@@ -112,7 +112,7 @@ export const ResultsStatsPanel: React.FC<ResultsStatsPanelProps> = ({
           }
         />
         <StatRow
-          label="Eyes in the frame"
+          label="Sunglasses"
           value={eyesLabel}
           valueClassName={eyesAccent}
           hint={
